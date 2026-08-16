@@ -27,23 +27,28 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch(`${API_URL}/api/dashboard`);
+      const response = await fetch(`${API_URL}/api/dashboard`, {
+        cache: "no-store",
+      });
 
       if (!response.ok) {
-        throw new Error(`Dashboard API returned ${response.status}`);
+        throw new Error(
+          `Dashboard API returned ${response.status}`
+        );
       }
 
       const result = await response.json();
 
-      if (!result || !result.schedule) {
-        throw new Error("Invalid dashboard response");
+      console.log("AgroMind API response:", result);
+
+      if (!result) {
+        throw new Error("Empty API response");
       }
 
       setData(result);
     } catch (err) {
-      console.error(err);
+      console.error("Dashboard error:", err);
       setError(err.message || "Unable to load dashboard");
-      setData(null);
     } finally {
       setLoading(false);
     }
@@ -66,6 +71,7 @@ function App() {
     return (
       <div className="error-screen">
         <h2>AgroMind Dashboard</h2>
+
         <p>{error}</p>
 
         <button onClick={load}>
@@ -77,136 +83,284 @@ function App() {
   }
 
   /*
-   * The API response structure is:
-   *
-   * {
-   *   schedule: {
-   *      ...
-   *      telemetry: {
-   *         ...
-   *      }
-   *   }
-   * }
+   * ==========================================
+   * API DATA
+   * ==========================================
    */
 
   const schedule = data?.schedule || {};
-  const telemetry = schedule?.telemetry || {};
 
-  // -----------------------------
-  // FARM INFORMATION
-  // -----------------------------
+  /*
+   * Telemetry can be returned either:
+   *
+   * schedule.telemetry
+   *
+   * or
+   *
+   * data.telemetry
+   *
+   * so we support both.
+   */
 
-  const crop = schedule.crop || "Tomato";
-  const cropAge = schedule.crop_age_days ?? 0;
-  const landSize = schedule.land_size_m2 ?? 100;
+  const telemetry =
+    schedule?.telemetry ||
+    data?.telemetry ||
+    {};
 
-  // -----------------------------
-  // IRRIGATION DATA
-  // -----------------------------
+  /*
+   * ==========================================
+   * FARM INFORMATION
+   * ==========================================
+   */
+
+  const crop =
+    schedule.crop ||
+    data?.crop ||
+    "Tomato";
+
+  const cropAge = Number(
+    schedule.crop_age_days ??
+      data?.crop_age_days ??
+      0
+  );
+
+  const landSize = Number(
+    schedule.land_size_m2 ??
+      data?.land_size_m2 ??
+      100
+  );
+
+  /*
+   * ==========================================
+   * IRRIGATION
+   * ==========================================
+   */
 
   const irrigationDepth = Number(
-    schedule.irrigation_depth_mm ?? 0
+    schedule.irrigation_depth_mm ??
+      data?.irrigation_depth_mm ??
+      0
   );
 
-  const waterRequired = Number(
-    schedule.water_required_l ?? 0
+  /*
+   * Application efficiency
+   */
+
+  const applicationEfficiency = Number(
+    telemetry.application_efficiency ??
+      schedule.application_efficiency ??
+      data?.application_efficiency ??
+      0.75
   );
 
-  const needLevel = schedule.need_level || "LOW";
+  /*
+   * Water requirement
+   *
+   * First use backend value.
+   *
+   * If unavailable, calculate:
+   *
+   * depth × area ÷ efficiency
+   */
+
+  let waterRequired = Number(
+    schedule.water_required_l ??
+      data?.water_required_l ??
+      0
+  );
+
+  if (
+    !Number.isFinite(waterRequired) ||
+    waterRequired <= 0
+  ) {
+    waterRequired =
+      (irrigationDepth * landSize) /
+      applicationEfficiency;
+  }
+
+  /*
+   * Pump flow
+   */
 
   const pumpFlow = Number(
-    schedule.pump_flow_l_min ?? 0
+    schedule.pump_flow_l_min ??
+      data?.pump_flow_l_min ??
+      10
   );
 
-  const pumpRuntime = Number(
-    schedule.pump_runtime_min ?? 0
+  /*
+   * Pump runtime
+   *
+   * First use backend value.
+   *
+   * Otherwise calculate:
+   *
+   * litres ÷ litres/min
+   */
+
+  let pumpRuntime = Number(
+    schedule.pump_runtime_min ??
+      data?.pump_runtime_min ??
+      0
   );
+
+  if (
+    !Number.isFinite(pumpRuntime) ||
+    pumpRuntime <= 0
+  ) {
+    pumpRuntime =
+      pumpFlow > 0
+        ? waterRequired / pumpFlow
+        : 0;
+  }
+
+  const needLevel =
+    schedule.need_level ||
+    data?.need_level ||
+    "LOW";
 
   const recommendedStart =
-    schedule.recommended_start || "06:00";
+    schedule.recommended_start ||
+    data?.recommended_start ||
+    "06:00";
 
   const recommendedEnd =
-    schedule.recommended_end || "--:--";
+    schedule.recommended_end ||
+    data?.recommended_end ||
+    "08:24";
 
-  // -----------------------------
-  // RAIN DATA
-  // -----------------------------
+  /*
+   * ==========================================
+   * RAIN
+   * ==========================================
+   */
 
   const rain24 = Number(
-    schedule.rain_next_24h_mm ?? 0
+    schedule.rain_next_24h_mm ??
+      data?.rain_next_24h_mm ??
+      0
   );
 
   const rain48 = Number(
-    schedule.rain_next_48h_mm ?? 0
+    schedule.rain_next_48h_mm ??
+      data?.rain_next_48h_mm ??
+      0
   );
 
   const rainProbability = Number(
-    schedule.rain_probability_next_48h ?? 0
+    schedule.rain_probability_next_48h ??
+      data?.rain_probability_next_48h ??
+      0
   );
 
-  // -----------------------------
-  // SENSOR / WEATHER DATA
-  // -----------------------------
+  /*
+   * ==========================================
+   * SENSOR DATA
+   * ==========================================
+   */
 
   const soilMoisture = Number(
-    telemetry.soil_moisture_pct ?? 0
+    telemetry.soil_moisture_pct ??
+      data?.soil_moisture_pct ??
+      0
   );
 
   const soilTemperature = Number(
-    telemetry.soil_temperature_C ?? 0
+    telemetry.soil_temperature_C ??
+      data?.soil_temperature_C ??
+      0
   );
 
   const solarIrradiance = Number(
-    telemetry.solar_irradiance_W_m2 ?? 0
+    telemetry.solar_irradiance_W_m2 ??
+      data?.solar_irradiance_W_m2 ??
+      0
   );
 
-  // -----------------------------
-  // DISPLAY HELPERS
-  // -----------------------------
+  /*
+   * ==========================================
+   * RAIN PROBABILITIES
+   * ==========================================
+   */
 
-  const formatNumber = (value, decimals = 0) => {
-    return Number(value || 0).toLocaleString(undefined, {
+  const rainProbability24 = Number(
+    telemetry.rain_probability_0_24h ??
+      data?.rain_probability_0_24h ??
+      0
+  );
+
+  const rainProbability48 = Number(
+    telemetry.rain_probability_24_48h ??
+      data?.rain_probability_24_48h ??
+      rainProbability
+  );
+
+  /*
+   * ==========================================
+   * MODEL
+   * ==========================================
+   */
+
+  const modelVersion =
+    schedule.model_version ||
+    data?.model_version ||
+    "AOSIS-v14";
+
+  /*
+   * ==========================================
+   * HELPERS
+   * ==========================================
+   */
+
+  function formatNumber(value, decimals = 0) {
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+      return "0";
+    }
+
+    return number.toLocaleString(undefined, {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
     });
-  };
+  }
 
-  const probabilityPercent = Math.round(
+  const rainProbabilityPercent = Math.round(
     rainProbability * 100
   );
 
-  const rainfallPercent24 = Number(
-    telemetry.rain_probability_0_24h ?? 0
+  const rainProbability24Percent = Math.round(
+    rainProbability24 * 100
   );
 
-  const rainfallPercent24Display = Math.round(
-    rainfallPercent24 * 100
+  const rainProbability48Percent = Math.round(
+    rainProbability48 * 100
   );
 
-  const rainfallPercent48 = Number(
-    telemetry.rain_probability_24_48h ?? rainProbability
-  );
-
-  const rainfallPercent48Display = Math.round(
-    rainfallPercent48 * 100
-  );
+  /*
+   * ==========================================
+   * DASHBOARD
+   * ==========================================
+   */
 
   return (
     <div className="app">
 
-      {/* =====================================
-          SIDEBAR
-      ====================================== */}
+      {/* SIDEBAR */}
 
       <aside className="sidebar">
 
         <div className="brand">
-          <div className="brand-mark">A</div>
+
+          <div className="brand-mark">
+            A
+          </div>
 
           <div>
             <strong>Agromind</strong>
             <span>Smart Agriculture</span>
           </div>
+
         </div>
 
         <nav>
@@ -218,21 +372,22 @@ function App() {
         </nav>
 
         <div className="status-card">
+
           <span>
             <span className="status-dot"></span>
             Online
           </span>
 
           <small>
-            AOSIS v14 • {crop}
+            {modelVersion} • {crop}
           </small>
+
         </div>
 
       </aside>
 
-      {/* =====================================
-          MAIN CONTENT
-      ====================================== */}
+
+      {/* MAIN */}
 
       <main>
 
@@ -241,32 +396,35 @@ function App() {
         <header className="topbar">
 
           <div>
+
             <div className="eyebrow">
               AI-OPTIMIZED IRRIGATION
             </div>
 
-            <h1>Good morning, Farmer.</h1>
+            <h1>
+              Good morning, Farmer.
+            </h1>
 
             <p>
               Here's what your farm needs today.
             </p>
+
           </div>
 
           <button
             className="refresh"
             onClick={load}
-            disabled={loading}
           >
             <RefreshCw size={17} />
-            {loading ? "Updating..." : "Refresh"}
+            Refresh
           </button>
 
         </header>
 
 
-        {/* =====================================
-            HERO / IRRIGATION RECOMMENDATION
-        ====================================== */}
+        {/* ==================================
+            IRRIGATION RECOMMENDATION
+        ================================== */}
 
         <section className="hero">
 
@@ -283,7 +441,10 @@ function App() {
               </span>
 
               <h2>
-                {formatNumber(irrigationDepth, 3)} mm
+                {formatNumber(
+                  irrigationDepth,
+                  3
+                )} mm
               </h2>
 
               <p>
@@ -291,6 +452,7 @@ function App() {
               </p>
 
             </div>
+
 
             <div className="hero-actions">
 
@@ -301,6 +463,7 @@ function App() {
                 <Droplets size={18} />
                 Irrigate Now
               </button>
+
 
               <button
                 className="secondary-button"
@@ -321,81 +484,104 @@ function App() {
           </div>
 
 
+          {/* WATER */}
+
           <div className="water-display">
 
             <Droplets size={40} />
 
             <strong>
-              {formatNumber(waterRequired, 2)}
+              {formatNumber(
+                waterRequired,
+                2
+              )}
             </strong>
 
-            <span>Litres</span>
+            <span>
+              Litres
+            </span>
 
           </div>
 
         </section>
 
 
-        {/* =====================================
+        {/* ==================================
             SENSOR METRICS
-        ====================================== */}
+        ================================== */}
 
         <section className="metrics">
 
           <Metric
             icon={<Droplets />}
             label="Soil Moisture"
-            value={formatNumber(soilMoisture)}
+            value={formatNumber(
+              soilMoisture
+            )}
             unit="%"
             sub="Live sensor"
           />
 
+
           <Metric
             icon={<Thermometer />}
             label="Soil Temperature"
-            value={formatNumber(soilTemperature, 1)}
+            value={formatNumber(
+              soilTemperature,
+              1
+            )}
             unit="°C"
             sub="ESP32-S3"
           />
 
+
           <Metric
             icon={<Sun />}
             label="Solar Irradiance"
-            value={formatNumber(solarIrradiance)}
+            value={formatNumber(
+              solarIrradiance
+            )}
             unit="W/m²"
             sub="OpenWeather"
           />
 
+
           <Metric
             icon={<CloudRain />}
             label="Rain - 48 hours"
-            value={formatNumber(rain48, 1)}
+            value={formatNumber(
+              rain48,
+              1
+            )}
             unit="mm"
-            sub={`${probabilityPercent}% probability`}
+            sub={`${rainProbabilityPercent}% probability`}
           />
 
         </section>
 
 
-        {/* =====================================
-            TWO COLUMN AREA
-        ====================================== */}
+        {/* ==================================
+            FORECAST + FARM
+        ================================== */}
 
         <div className="two-column">
 
-          {/* ===================================
-              WEATHER FORECAST
-          ==================================== */}
+          {/* FORECAST */}
 
           <section className="panel">
 
             <div className="panel-header">
 
               <div>
-                <h3>48-hour forecast</h3>
+
+                <h3>
+                  48-hour forecast
+                </h3>
+
                 <span>
                   Rainfall-aware scheduling
                 </span>
+
               </div>
 
               <CloudRain size={20} />
@@ -407,14 +593,20 @@ function App() {
 
               <div className="forecast-item">
 
-                <span>Next 24h</span>
+                <span>
+                  Next 24h
+                </span>
 
                 <strong>
-                  {formatNumber(rain24, 1)} mm
+                  {formatNumber(
+                    rain24,
+                    1
+                  )} mm
                 </strong>
 
                 <small>
-                  {rainfallPercent24Display}% probability
+                  {rainProbability24Percent}%
+                  probability
                 </small>
 
               </div>
@@ -422,14 +614,20 @@ function App() {
 
               <div className="forecast-item">
 
-                <span>24–48h</span>
+                <span>
+                  24–48h
+                </span>
 
                 <strong>
-                  {formatNumber(rain48, 1)} mm
+                  {formatNumber(
+                    rain48,
+                    1
+                  )} mm
                 </strong>
 
                 <small>
-                  {rainfallPercent48Display}% probability
+                  {rainProbability48Percent}%
+                  probability
                 </small>
 
               </div>
@@ -442,9 +640,9 @@ function App() {
               <Leaf size={18} />
 
               <span>
-                AgroMind considers expected rainfall
-                before calculating today's minimum
-                irrigation dose.
+                AgroMind considers expected
+                rainfall before calculating
+                today's minimum irrigation dose.
               </span>
 
             </div>
@@ -452,9 +650,7 @@ function App() {
           </section>
 
 
-          {/* ===================================
-              FARM VISUALIZATION
-          ==================================== */}
+          {/* FARM */}
 
           <section className="panel">
 
@@ -462,7 +658,9 @@ function App() {
 
               <div>
 
-                <h3>Farm visualization</h3>
+                <h3>
+                  Farm visualization
+                </h3>
 
                 <span>
                   {landSize} m² • {crop}
@@ -477,25 +675,29 @@ function App() {
 
             <div className="farm">
 
-              {[...Array(24)].map((_, index) => (
-
-                <div
-                  key={index}
-                  className={`farm-zone ${
-                    index % 7 === 0
-                      ? "zone-dry"
-                      : ""
-                  }`}
-                />
-
-              ))}
+              {Array.from(
+                { length: 24 },
+                (_, index) => (
+                  <div
+                    key={index}
+                    className="farm-zone"
+                  />
+                )
+              )}
 
             </div>
 
 
             <div className="farm-label">
-              <strong>ZONE A</strong>
-              <span>Live monitoring</span>
+
+              <strong>
+                ZONE A
+              </strong>
+
+              <span>
+                Live monitoring
+              </span>
+
             </div>
 
           </section>
@@ -503,9 +705,9 @@ function App() {
         </div>
 
 
-        {/* =====================================
-            SCHEDULE
-        ====================================== */}
+        {/* ==================================
+            PUMP SCHEDULE
+        ================================== */}
 
         <section
           className="schedulebar"
@@ -519,15 +721,32 @@ function App() {
             </span>
 
             <strong>
-              {recommendedStart} – {recommendedEnd}
+              {recommendedStart}
+              {" – "}
+              {recommendedEnd}
             </strong>
 
             <small>
-              {formatNumber(pumpRuntime, 2)} minutes
+
+              {formatNumber(
+                pumpRuntime,
+                2
+              )} minutes
+
               {" • "}
-              {formatNumber(pumpFlow, 1)} L/min
+
+              {formatNumber(
+                pumpFlow,
+                1
+              )} L/min
+
               {" • "}
-              {formatNumber(waterRequired, 2)} L
+
+              {formatNumber(
+                waterRequired,
+                2
+              )} L
+
             </small>
 
           </div>
@@ -536,46 +755,57 @@ function App() {
           <button
             onClick={() => setManual(true)}
           >
+
             <Power size={17} />
+
             Manual Override
+
           </button>
 
         </section>
 
 
-        {/* =====================================
+        {/* ==================================
             FARM DETAILS
-        ====================================== */}
+        ================================== */}
 
         <section className="details-grid">
 
           <div className="detail-card">
 
-            <span>Crop</span>
+            <span>
+              Crop
+            </span>
 
-            <strong>{crop}</strong>
-
-          </div>
-
-
-          <div className="detail-card">
-
-            <span>Crop age</span>
-
-            <strong>{cropAge} days</strong>
+            <strong>
+              {crop}
+            </strong>
 
           </div>
 
 
           <div className="detail-card">
 
-            <span>Application efficiency</span>
+            <span>
+              Crop age
+            </span>
+
+            <strong>
+              {cropAge} days
+            </strong>
+
+          </div>
+
+
+          <div className="detail-card">
+
+            <span>
+              Application efficiency
+            </span>
 
             <strong>
               {Math.round(
-                Number(
-                  telemetry.application_efficiency ?? 0.75
-                ) * 100
+                applicationEfficiency * 100
               )}%
             </strong>
 
@@ -584,10 +814,12 @@ function App() {
 
           <div className="detail-card">
 
-            <span>Model</span>
+            <span>
+              Model
+            </span>
 
             <strong>
-              {schedule.model_version || "AOSIS"}
+              {modelVersion}
             </strong>
 
           </div>
@@ -597,9 +829,9 @@ function App() {
       </main>
 
 
-      {/* =====================================
+      {/* ==================================
           MANUAL IRRIGATION MODAL
-      ====================================== */}
+      ================================== */}
 
       {manual && (
 
@@ -615,41 +847,59 @@ function App() {
             }
           >
 
-            <h2>Manual Irrigation</h2>
+            <h2>
+              Manual Irrigation
+            </h2>
 
             <p>
-              Send a manual irrigation command to
-              the pump controller.
+              Review the recommended irrigation
+              amount before starting the pump.
             </p>
 
+
             <div className="manual-summary">
 
-              <span>Recommended amount</span>
+              <span>
+                Recommended amount
+              </span>
 
               <strong>
-                {formatNumber(waterRequired, 2)} L
+                {formatNumber(
+                  waterRequired,
+                  2
+                )} L
               </strong>
 
             </div>
 
+
             <div className="manual-summary">
 
-              <span>Recommended runtime</span>
+              <span>
+                Pump runtime
+              </span>
 
               <strong>
-                {formatNumber(pumpRuntime, 2)} min
+                {formatNumber(
+                  pumpRuntime,
+                  2
+                )} minutes
               </strong>
 
             </div>
+
 
             <div className="modal-actions">
 
               <button
                 className="secondary-button"
-                onClick={() => setManual(false)}
+                onClick={() =>
+                  setManual(false)
+                }
               >
                 Cancel
               </button>
+
 
               <button
                 className="primary-button"
@@ -657,11 +907,15 @@ function App() {
                   alert(
                     "Manual irrigation command ready for pump controller."
                   );
+
                   setManual(false);
                 }}
               >
+
                 <Power size={17} />
+
                 Start Irrigation
+
               </button>
 
             </div>
@@ -677,9 +931,9 @@ function App() {
 }
 
 
-/* =========================================
+/* ==========================================
    METRIC COMPONENT
-========================================= */
+========================================== */
 
 function Metric({
   icon,
@@ -697,14 +951,23 @@ function Metric({
 
       <div className="metric-content">
 
-        <span>{label}</span>
+        <span>
+          {label}
+        </span>
 
         <strong>
+
           {value}
-          <small>{unit}</small>
+
+          <small>
+            {unit}
+          </small>
+
         </strong>
 
-        <em>{sub}</em>
+        <em>
+          {sub}
+        </em>
 
       </div>
 
@@ -713,9 +976,9 @@ function Metric({
 }
 
 
-/* =========================================
-   RENDER
-========================================= */
+/* ==========================================
+   START REACT
+========================================== */
 
 createRoot(
   document.getElementById("root")
