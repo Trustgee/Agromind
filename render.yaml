@@ -1,0 +1,23 @@
+
+services:
+  - type: web
+    name: agromind-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    plan: free
+    envVars:
+      - key: OPENWEATHER_API_KEY
+        sync: false
+
+  - type: web
+    name: agromind-dashboard
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    plan: free
+    envVars:
+      - key: VITE_API_URL
+        sync: false
