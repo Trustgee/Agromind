@@ -1,295 +1,70 @@
+
 import os
-from datetime import datetime, timezone
-
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-
-from services.scheduler import create_schedule
-from services.weather import get_weather
-
-
-# ============================================================
-# APP CONFIGURATION
-# ============================================================
-
-app = Flask(__name__)
-
-CORS(app)
-
-
-# ============================================================
-# DEFAULT FARM SETTINGS
-# ============================================================
-
-DEFAULT_FARM = {
-    "crop_type": "Tomato",
-    "crop_age_days": 60,
-    "land_size_m2": 100.0,
-}
-
-
-# ============================================================
-# ROOT
-# ============================================================
-
-@app.get("/")
-def root():
-
-    return jsonify({
-        "project": "Agromind",
-        "system": "AI-Optimized Solar Irrigation Scheduler",
-        "version": "AOSIS-v14",
-        "status": "online"
-    })
-
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-@app.get("/api/health")
-def health():
-
-    return jsonify({
-        "status": "healthy",
-        "version": "AOSIS-v14"
-    })
-
-
-# ============================================================
-# IRRIGATION SCHEDULE
-# ============================================================
-
-@app.post("/api/schedule")
-def schedule():
-
-    data = request.get_json(silent=True) or {}
-
-    required = [
-        "soil_moisture_pct",
-        "soil_temperature_C",
-        "solar_irradiance_W_m2",
-        "rain_0_24h_mm",
-        "rain_probability_0_24h",
-        "rain_24_48h_mm",
-        "rain_probability_24_48h",
-        "crop_type",
-        "crop_age_days",
-        "land_size_m2",
-    ]
-
-    missing = [
-        key
-        for key in required
-        if key not in data
-    ]
-
-    if missing:
-
-        return jsonify({
-            "error": "Missing fields",
-            "fields": missing
-        }), 400
-
-
-    try:
-
-        result = create_schedule(**data)
-
-        return jsonify(result)
-
-
-    except Exception as exc:
-
-        return jsonify({
-            "error": str(exc)
-        }), 400
-
-
-# ============================================================
-# WEATHER API
-# ============================================================
-
-@app.get("/api/weather")
-def weather():
-
-    lat = request.args.get(
-        "lat",
-        type=float
-    )
-
-    lon = request.args.get(
-        "lon",
-        type=float
-    )
-
-
-    if lat is None or lon is None:
-
-        return jsonify({
-            "error": "lat and lon are required"
-        }), 400
-
-
-    try:
-
-        result = get_weather(
-            lat,
-            lon
-        )
-
-        return jsonify(result)
-
-
-    except Exception as exc:
-
-        return jsonify({
-            "error": str(exc)
-        }), 502
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
-
-@app.get("/api/dashboard")
-def dashboard():
-
-    # --------------------------------------------------------
-    # Get farm settings from frontend
-    # --------------------------------------------------------
-
-    crop_type = request.args.get(
-        "crop_type",
-        DEFAULT_FARM["crop_type"]
-    )
-
-    crop_age_days = request.args.get(
-        "crop_age_days",
-        default=DEFAULT_FARM["crop_age_days"],
-        type=int
-    )
-
-    land_size_m2 = request.args.get(
-        "land_size_m2",
-        default=DEFAULT_FARM["land_size_m2"],
-        type=float
-    )
-
-
-    # --------------------------------------------------------
-    # Validate values
-    # --------------------------------------------------------
-
-    if crop_type not in [
-        "Tomato",
-        "Maize",
-        "Pepper"
-    ]:
-
-        crop_type = DEFAULT_FARM["crop_type"]
-
-
-    if crop_age_days is None or crop_age_days < 0:
-
-        crop_age_days = DEFAULT_FARM["crop_age_days"]
-
-
-    if land_size_m2 is None or land_size_m2 <= 0:
-
-        land_size_m2 = DEFAULT_FARM["land_size_m2"]
-
-
-    # --------------------------------------------------------
-    # DEMO / ESP32 TELEMETRY
-    #
-    # Replace these values later when the ESP32 telemetry
-    # endpoint is connected.
-    # --------------------------------------------------------
-
-    payload = {
-
-        "soil_moisture_pct": 42.0,
-
-        "soil_temperature_C": 28.7,
-
-        "solar_irradiance_W_m2": 620.0,
-
-        "rain_0_24h_mm": 0.0,
-
-        "rain_probability_0_24h": 0.10,
-
-        "rain_24_48h_mm": 8.0,
-
-        "rain_probability_24_48h": 0.75,
-
-        "crop_type": crop_type,
-
-        "crop_age_days": crop_age_days,
-
-        "land_size_m2": land_size_m2,
-
-        "pump_flow_L_min": 10.0,
-
-        "application_efficiency": 0.75,
-
-        "start_time": "06:00",
+import joblib
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+
+BASE=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_DIR=os.path.join(BASE,"models")
+classifier=joblib.load(os.path.join(MODEL_DIR,"aosis_v14_need_classifier.pkl"))
+regressor=joblib.load(os.path.join(MODEL_DIR,"aosis_v14_dose_regressor.pkl"))
+META=joblib.load(os.path.join(MODEL_DIR,"aosis_v14_metadata.pkl"))
+
+FEATURES=META["features"]
+MAX_DEPTH=float(META["max_daily_application_depth_mm"])
+
+def create_schedule(
+    soil_moisture_pct, soil_temperature_C, solar_irradiance_W_m2,
+    rain_0_24h_mm, rain_probability_0_24h,
+    rain_24_48h_mm, rain_probability_24_48h,
+    crop_type, crop_age_days, land_size_m2,
+    pump_flow_L_min=10.0, application_efficiency=0.75,
+    start_time="06:00"
+):
+    if crop_type not in META["crops"]:
+        raise ValueError("crop_type must be Tomato or Pepper")
+    if land_size_m2<=0 or pump_flow_L_min<=0:
+        raise ValueError("land_size_m2 and pump_flow_L_min must be positive")
+    if not 0 < application_efficiency <= 1:
+        raise ValueError("application_efficiency must be between 0 and 1")
+
+    X=pd.DataFrame([{
+        "soil_moisture_pct":float(soil_moisture_pct),
+        "soil_temperature_C":float(soil_temperature_C),
+        "solar_irradiance_W_m2":float(solar_irradiance_W_m2),
+        "rain_0_24h_mm":float(rain_0_24h_mm),
+        "rain_probability_0_24h":float(rain_probability_0_24h),
+        "rain_24_48h_mm":float(rain_24_48h_mm),
+        "rain_probability_24_48h":float(rain_probability_24_48h),
+        "crop_code":META["crops"][crop_type],
+        "crop_age_days":float(crop_age_days)
+    }])[FEATURES]
+
+    need=str(classifier.predict(X)[0])
+    dose=0.0 if need=="LOW" else float(np.clip(regressor.predict(X)[0],0,MAX_DEPTH))
+
+    volume=(dose*float(land_size_m2))/float(application_efficiency)
+    runtime=volume/float(pump_flow_L_min)
+
+    h,m=map(int,start_time.split(":"))
+    start=datetime(2000,1,1,h,m)
+    end=start+timedelta(minutes=runtime)
+
+    return {
+        "model_version":META["model_version"],
+        "crop":crop_type,
+        "crop_age_days":int(crop_age_days),
+        "need_level":need,
+        "irrigation_depth_mm":round(dose,3),
+        "land_size_m2":round(float(land_size_m2),2),
+        "water_required_L":round(volume,2),
+        "pump_flow_L_min":round(float(pump_flow_L_min),2),
+        "pump_runtime_min":round(runtime,2),
+        "rain_next_24h_mm":round(float(rain_0_24h_mm),2),
+        "rain_next_48h_mm":round(float(rain_24_48h_mm),2),
+        "rain_probability_next_48h":round(float(rain_probability_24_48h),2),
+        "max_daily_depth_mm":MAX_DEPTH,
+        "recommended_start":start.strftime("%H:%M"),
+        "recommended_end":end.strftime("%H:%M")
     }
-
-
-    # --------------------------------------------------------
-    # CREATE AI IRRIGATION SCHEDULE
-    # --------------------------------------------------------
-
-    try:
-
-        result = create_schedule(
-            **payload
-        )
-
-
-    except Exception as exc:
-
-        return jsonify({
-            "error": "Schedule calculation failed",
-            "details": str(exc)
-        }), 400
-
-
-    # --------------------------------------------------------
-    # RESPONSE
-    # --------------------------------------------------------
-
-    return jsonify({
-
-        "timestamp":
-            datetime.now(
-                timezone.utc
-            ).isoformat(),
-
-        "telemetry":
-            payload,
-
-        "schedule":
-            result
-
-    })
-
-
-# ============================================================
-# RUN SERVER
-# ============================================================
-
-if __name__ == "__main__":
-
-    port = int(
-        os.getenv(
-            "PORT",
-            "10000"
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
