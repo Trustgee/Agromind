@@ -23,13 +23,16 @@ function App() {
   const [error, setError] = useState("");
 
   async function load() {
-    setLoading(true);
-    setError("");
-
     try {
-      const response = await fetch(`${API_URL}/api/dashboard`, {
-        cache: "no-store",
-      });
+      setLoading(true);
+      setError("");
+
+      const response = await fetch(
+        `${API_URL}/api/dashboard`,
+        {
+          cache: "no-store",
+        }
+      );
 
       if (!response.ok) {
         throw new Error(
@@ -39,16 +42,14 @@ function App() {
 
       const result = await response.json();
 
-      console.log("AgroMind API response:", result);
-
-      if (!result) {
-        throw new Error("Empty API response");
-      }
+      console.log("AgroMind API:", result);
 
       setData(result);
     } catch (err) {
-      console.error("Dashboard error:", err);
-      setError(err.message || "Unable to load dashboard");
+      console.error(err);
+      setError(
+        err.message || "Unable to load dashboard"
+      );
     } finally {
       setLoading(false);
     }
@@ -62,7 +63,7 @@ function App() {
     return (
       <div className="loading-screen">
         <RefreshCw className="spin" size={24} />
-        <span>Loading AgroMind...</span>
+        Loading AgroMind...
       </div>
     );
   }
@@ -71,7 +72,6 @@ function App() {
     return (
       <div className="error-screen">
         <h2>AgroMind Dashboard</h2>
-
         <p>{error}</p>
 
         <button onClick={load}>
@@ -82,244 +82,124 @@ function App() {
     );
   }
 
-  /*
-   * ==========================================
-   * API DATA
-   * ==========================================
-   */
-
   const schedule = data?.schedule || {};
 
   /*
-   * Telemetry can be returned either:
-   *
-   * schedule.telemetry
-   *
-   * or
-   *
-   * data.telemetry
-   *
-   * so we support both.
+   * YOUR API RETURNS TELEMETRY INSIDE SCHEDULE
    */
+  const telemetry = schedule?.telemetry || {};
 
-  const telemetry =
-    schedule?.telemetry ||
-    data?.telemetry ||
-    {};
+  /* ================================
+     FARM
+  ================================= */
 
-  /*
-   * ==========================================
-   * FARM INFORMATION
-   * ==========================================
-   */
-
-  const crop =
-    schedule.crop ||
-    data?.crop ||
-    "Tomato";
+  const crop = schedule.crop || "Tomato";
 
   const cropAge = Number(
-    schedule.crop_age_days ??
-      data?.crop_age_days ??
-      0
+    schedule.crop_age_days ?? 0
   );
 
   const landSize = Number(
-    schedule.land_size_m2 ??
-      data?.land_size_m2 ??
-      100
+    schedule.land_size_m2 ?? 100
   );
 
-  /*
-   * ==========================================
-   * IRRIGATION
-   * ==========================================
-   */
+  /* ================================
+     IRRIGATION
+  ================================= */
 
   const irrigationDepth = Number(
-    schedule.irrigation_depth_mm ??
-      data?.irrigation_depth_mm ??
-      0
+    schedule.irrigation_depth_mm ?? 0
   );
-
-  /*
-   * Application efficiency
-   */
-
-  const applicationEfficiency = Number(
-    telemetry.application_efficiency ??
-      schedule.application_efficiency ??
-      data?.application_efficiency ??
-      0.75
-  );
-
-  /*
-   * Water requirement
-   *
-   * First use backend value.
-   *
-   * If unavailable, calculate:
-   *
-   * depth × area ÷ efficiency
-   */
-
-  let waterRequired = Number(
-    schedule.water_required_l ??
-      data?.water_required_l ??
-      0
-  );
-
-  if (
-    !Number.isFinite(waterRequired) ||
-    waterRequired <= 0
-  ) {
-    waterRequired =
-      (irrigationDepth * landSize) /
-      applicationEfficiency;
-  }
-
-  /*
-   * Pump flow
-   */
-
-  const pumpFlow = Number(
-    schedule.pump_flow_l_min ??
-      data?.pump_flow_l_min ??
-      10
-  );
-
-  /*
-   * Pump runtime
-   *
-   * First use backend value.
-   *
-   * Otherwise calculate:
-   *
-   * litres ÷ litres/min
-   */
-
-  let pumpRuntime = Number(
-    schedule.pump_runtime_min ??
-      data?.pump_runtime_min ??
-      0
-  );
-
-  if (
-    !Number.isFinite(pumpRuntime) ||
-    pumpRuntime <= 0
-  ) {
-    pumpRuntime =
-      pumpFlow > 0
-        ? waterRequired / pumpFlow
-        : 0;
-  }
 
   const needLevel =
-    schedule.need_level ||
-    data?.need_level ||
-    "LOW";
-
-  const recommendedStart =
-    schedule.recommended_start ||
-    data?.recommended_start ||
-    "06:00";
-
-  const recommendedEnd =
-    schedule.recommended_end ||
-    data?.recommended_end ||
-    "08:24";
+    schedule.need_level || "LOW";
 
   /*
-   * ==========================================
-   * RAIN
-   * ==========================================
+   * IMPORTANT:
+   *
+   * API uses water_required_L
+   * API uses pump_flow_L_min
+   *
+   * Capital L matters.
    */
 
+  const waterRequired = Number(
+    schedule.water_required_L ?? 0
+  );
+
+  const pumpFlow = Number(
+    schedule.pump_flow_L_min ?? 0
+  );
+
+  const pumpRuntime = Number(
+    schedule.pump_runtime_min ?? 0
+  );
+
+  const recommendedStart =
+    schedule.recommended_start || "06:00";
+
+  const recommendedEnd =
+    schedule.recommended_end || "08:24";
+
+  /* ================================
+     RAIN
+  ================================= */
+
   const rain24 = Number(
-    schedule.rain_next_24h_mm ??
-      data?.rain_next_24h_mm ??
-      0
+    schedule.rain_next_24h_mm ?? 0
   );
 
   const rain48 = Number(
-    schedule.rain_next_48h_mm ??
-      data?.rain_next_48h_mm ??
-      0
+    schedule.rain_next_48h_mm ?? 0
   );
 
   const rainProbability = Number(
-    schedule.rain_probability_next_48h ??
-      data?.rain_probability_next_48h ??
-      0
+    schedule.rain_probability_next_48h ?? 0
   );
 
-  /*
-   * ==========================================
-   * SENSOR DATA
-   * ==========================================
-   */
+  /* ================================
+     TELEMETRY
+  ================================= */
 
   const soilMoisture = Number(
-    telemetry.soil_moisture_pct ??
-      data?.soil_moisture_pct ??
-      0
+    telemetry.soil_moisture_pct ?? 0
   );
 
   const soilTemperature = Number(
-    telemetry.soil_temperature_C ??
-      data?.soil_temperature_C ??
-      0
+    telemetry.soil_temperature_C ?? 0
   );
 
   const solarIrradiance = Number(
-    telemetry.solar_irradiance_W_m2 ??
-      data?.solar_irradiance_W_m2 ??
-      0
+    telemetry.solar_irradiance_W_m2 ?? 0
   );
 
-  /*
-   * ==========================================
-   * RAIN PROBABILITIES
-   * ==========================================
-   */
+  const applicationEfficiency = Number(
+    telemetry.application_efficiency ?? 0.75
+  );
 
   const rainProbability24 = Number(
-    telemetry.rain_probability_0_24h ??
-      data?.rain_probability_0_24h ??
-      0
+    telemetry.rain_probability_0_24h ?? 0
   );
 
   const rainProbability48 = Number(
-    telemetry.rain_probability_24_48h ??
-      data?.rain_probability_24_48h ??
-      rainProbability
+    telemetry.rain_probability_24_48h ?? 0
   );
 
-  /*
-   * ==========================================
-   * MODEL
-   * ==========================================
-   */
-
   const modelVersion =
-    schedule.model_version ||
-    data?.model_version ||
-    "AOSIS-v14";
+    schedule.model_version || "AOSIS-v14";
 
-  /*
-   * ==========================================
-   * HELPERS
-   * ==========================================
-   */
+  /* ================================
+     HELPERS
+  ================================= */
 
   function formatNumber(value, decimals = 0) {
-    const number = Number(value);
+    const n = Number(value);
 
-    if (!Number.isFinite(number)) {
+    if (!Number.isFinite(n)) {
       return "0";
     }
 
-    return number.toLocaleString(undefined, {
+    return n.toLocaleString(undefined, {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
     });
@@ -329,24 +209,20 @@ function App() {
     rainProbability * 100
   );
 
-  const rainProbability24Percent = Math.round(
+  const rain24Percent = Math.round(
     rainProbability24 * 100
   );
 
-  const rainProbability48Percent = Math.round(
+  const rain48Percent = Math.round(
     rainProbability48 * 100
   );
-
-  /*
-   * ==========================================
-   * DASHBOARD
-   * ==========================================
-   */
 
   return (
     <div className="app">
 
-      {/* SIDEBAR */}
+      {/* =========================
+          SIDEBAR
+      ========================== */}
 
       <aside className="sidebar">
 
@@ -364,11 +240,27 @@ function App() {
         </div>
 
         <nav>
-          <a className="active">Overview</a>
-          <a>Farm Map</a>
-          <a>Irrigation</a>
-          <a>Weather</a>
-          <a>Plant Health</a>
+
+          <a className="active">
+            Overview
+          </a>
+
+          <a>
+            Farm Map
+          </a>
+
+          <a>
+            Irrigation
+          </a>
+
+          <a>
+            Weather
+          </a>
+
+          <a>
+            Plant Health
+          </a>
+
         </nav>
 
         <div className="status-card">
@@ -387,11 +279,11 @@ function App() {
       </aside>
 
 
-      {/* MAIN */}
+      {/* =========================
+          MAIN
+      ========================== */}
 
       <main>
-
-        {/* HEADER */}
 
         <header className="topbar">
 
@@ -422,9 +314,9 @@ function App() {
         </header>
 
 
-        {/* ==================================
-            IRRIGATION RECOMMENDATION
-        ================================== */}
+        {/* =========================
+            RECOMMENDATION
+        ========================== */}
 
         <section className="hero">
 
@@ -453,7 +345,6 @@ function App() {
 
             </div>
 
-
             <div className="hero-actions">
 
               <button
@@ -463,7 +354,6 @@ function App() {
                 <Droplets size={18} />
                 Irrigate Now
               </button>
-
 
               <button
                 className="secondary-button"
@@ -483,8 +373,6 @@ function App() {
 
           </div>
 
-
-          {/* WATER */}
 
           <div className="water-display">
 
@@ -506,9 +394,9 @@ function App() {
         </section>
 
 
-        {/* ==================================
-            SENSOR METRICS
-        ================================== */}
+        {/* =========================
+            SENSOR CARDS
+        ========================== */}
 
         <section className="metrics">
 
@@ -522,7 +410,6 @@ function App() {
             sub="Live sensor"
           />
 
-
           <Metric
             icon={<Thermometer />}
             label="Soil Temperature"
@@ -534,7 +421,6 @@ function App() {
             sub="ESP32-S3"
           />
 
-
           <Metric
             icon={<Sun />}
             label="Solar Irradiance"
@@ -544,7 +430,6 @@ function App() {
             unit="W/m²"
             sub="OpenWeather"
           />
-
 
           <Metric
             icon={<CloudRain />}
@@ -560,20 +445,17 @@ function App() {
         </section>
 
 
-        {/* ==================================
+        {/* =========================
             FORECAST + FARM
-        ================================== */}
+        ========================== */}
 
         <div className="two-column">
-
-          {/* FORECAST */}
 
           <section className="panel">
 
             <div className="panel-header">
 
               <div>
-
                 <h3>
                   48-hour forecast
                 </h3>
@@ -581,13 +463,11 @@ function App() {
                 <span>
                   Rainfall-aware scheduling
                 </span>
-
               </div>
 
               <CloudRain size={20} />
 
             </div>
-
 
             <div className="forecast">
 
@@ -605,12 +485,11 @@ function App() {
                 </strong>
 
                 <small>
-                  {rainProbability24Percent}%
+                  {rain24Percent}%
                   probability
                 </small>
 
               </div>
-
 
               <div className="forecast-item">
 
@@ -626,14 +505,13 @@ function App() {
                 </strong>
 
                 <small>
-                  {rainProbability48Percent}%
+                  {rain48Percent}%
                   probability
                 </small>
 
               </div>
 
             </div>
-
 
             <div className="insight">
 
@@ -650,7 +528,7 @@ function App() {
           </section>
 
 
-          {/* FARM */}
+          {/* FARM VISUALIZATION */}
 
           <section className="panel">
 
@@ -672,7 +550,6 @@ function App() {
 
             </div>
 
-
             <div className="farm">
 
               {Array.from(
@@ -681,12 +558,15 @@ function App() {
                   <div
                     key={index}
                     className="farm-zone"
-                  />
+                  >
+                    <span>
+                      {index + 1}
+                    </span>
+                  </div>
                 )
               )}
 
             </div>
-
 
             <div className="farm-label">
 
@@ -705,9 +585,9 @@ function App() {
         </div>
 
 
-        {/* ==================================
-            PUMP SCHEDULE
-        ================================== */}
+        {/* =========================
+            PUMP WINDOW
+        ========================== */}
 
         <section
           className="schedulebar"
@@ -751,7 +631,6 @@ function App() {
 
           </div>
 
-
           <button
             onClick={() => setManual(true)}
           >
@@ -765,9 +644,9 @@ function App() {
         </section>
 
 
-        {/* ==================================
-            FARM DETAILS
-        ================================== */}
+        {/* =========================
+            DETAILS
+        ========================== */}
 
         <section className="details-grid">
 
@@ -783,7 +662,6 @@ function App() {
 
           </div>
 
-
           <div className="detail-card">
 
             <span>
@@ -795,7 +673,6 @@ function App() {
             </strong>
 
           </div>
-
 
           <div className="detail-card">
 
@@ -810,7 +687,6 @@ function App() {
             </strong>
 
           </div>
-
 
           <div className="detail-card">
 
@@ -829,9 +705,9 @@ function App() {
       </main>
 
 
-      {/* ==================================
-          MANUAL IRRIGATION MODAL
-      ================================== */}
+      {/* =========================
+          MANUAL MODAL
+      ========================== */}
 
       {manual && (
 
@@ -842,8 +718,8 @@ function App() {
 
           <div
             className="modal-box"
-            onClick={(event) =>
-              event.stopPropagation()
+            onClick={(e) =>
+              e.stopPropagation()
             }
           >
 
@@ -855,7 +731,6 @@ function App() {
               Review the recommended irrigation
               amount before starting the pump.
             </p>
-
 
             <div className="manual-summary">
 
@@ -872,7 +747,6 @@ function App() {
 
             </div>
 
-
             <div className="manual-summary">
 
               <span>
@@ -888,7 +762,6 @@ function App() {
 
             </div>
 
-
             <div className="modal-actions">
 
               <button
@@ -899,7 +772,6 @@ function App() {
               >
                 Cancel
               </button>
-
 
               <button
                 className="primary-button"
@@ -931,9 +803,9 @@ function App() {
 }
 
 
-/* ==========================================
+/* ================================
    METRIC COMPONENT
-========================================== */
+================================ */
 
 function Metric({
   icon,
@@ -976,9 +848,9 @@ function Metric({
 }
 
 
-/* ==========================================
-   START REACT
-========================================== */
+/* ================================
+   REACT ROOT
+================================ */
 
 createRoot(
   document.getElementById("root")
