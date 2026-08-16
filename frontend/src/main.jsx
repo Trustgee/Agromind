@@ -6,174 +6,368 @@ import {
   CloudRain,
   Thermometer,
   Leaf,
+  Clock3,
   Map,
   RefreshCw,
   Power,
   ChevronRight,
+  AlertTriangle,
+  Gauge,
 } from "lucide-react";
 
 import "./styles.css";
+
+
+/* =========================================================
+   AGROMIND API
+   ========================================================= */
 
 const API =
   import.meta.env.VITE_API_URL ||
   "https://agromind-api-w832.onrender.com";
 
+
+/* =========================================================
+   MAIN APP
+   ========================================================= */
+
 function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [manual, setManual] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(null);
 
-  async function load() {
+  /*
+   * Load dashboard information from the backend.
+   */
+  async function loadDashboard() {
     setLoading(true);
-    setError("");
+    setError(null);
 
     try {
       const response = await fetch(`${API}/api/dashboard`);
 
       if (!response.ok) {
-        throw new Error("Dashboard API unavailable");
+        throw new Error(`Dashboard API returned ${response.status}`);
       }
 
-      const json = await response.json();
-      setData(json);
+      const result = await response.json();
+
+      setData(result);
     } catch (err) {
-      console.error(err);
-      setError(err.message || "Unable to load dashboard");
+      console.error("Dashboard error:", err);
+      setError("Unable to load farm data.");
       setData(null);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
 
   /*
-   * Safe fallback values.
-   * These prevent the dashboard from crashing if the backend
-   * temporarily doesn't return a particular field.
+   * Load data when the dashboard opens.
    */
+  useEffect(() => {
+    loadDashboard();
+  }, []);
 
-  const telemetry = data?.telemetry || {};
-  const schedule = data?.schedule || {};
 
-  const soilMoisture = telemetry.soil_moisture_pct ?? 0;
-  const soilTemperature = telemetry.soil_temperature_C ?? 0;
-  const solarIrradiance = telemetry.solar_irradiance_W_m2 ?? 0;
+  /* =======================================================
+     LOADING SCREEN
+     ======================================================= */
 
-  const rain24 = telemetry.rain_0_24h_mm ?? 0;
-  const rain48 = telemetry.rain_24_48h_mm ?? 0;
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-card">
+          <Leaf size={42} />
+          <h2>Agromind</h2>
+          <p>Loading your farm intelligence...</p>
+        </div>
+      </div>
+    );
+  }
+
+
+  /* =======================================================
+     ERROR SCREEN
+     ======================================================= */
+
+  if (error || !data) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-card">
+          <AlertTriangle size={42} />
+
+          <h2>Agromind</h2>
+
+          <p>
+            {error || "No dashboard data is available."}
+          </p>
+
+          <button
+            className="primary-button"
+            onClick={loadDashboard}
+          >
+            <RefreshCw size={17} />
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+
+  /* =======================================================
+     DATA NORMALIZATION
+     ======================================================= */
+
+  const t = data.telemetry || data;
+
+  const schedule = data.schedule || {};
+
+  const soilMoisture =
+    Number(
+      t.soil_moisture_pct ??
+      t.soil_moisture ??
+      0
+    );
+
+  const soilTemperature =
+    Number(
+      t.soil_temperature_c ??
+      t.soil_temperature_C ??
+      t.soil_temp ??
+      0
+    );
+
+  const solarIrradiance =
+    Number(
+      t.solar_irradiance_w_m2 ??
+      t.solar_irradiance_W_m2 ??
+      0
+    );
+
+  const rain24 =
+    Number(
+      t.rain_0_24h_mm ??
+      t.rain_24h_mm ??
+      t.rain_0_24h ??
+      0
+    );
+
+  const rain48 =
+    Number(
+      t.rain_24_48h_mm ??
+      t.rain_24_48h ??
+      0
+    );
 
   const rainProbability24 =
-    telemetry.rain_probability_0_24h ?? 0;
+    Number(
+      t.rain_probability_0_24h ??
+      t.rain_probability_24h ??
+      0
+    );
 
   const rainProbability48 =
-    telemetry.rain_probability_24_48h ?? 0;
+    Number(
+      t.rain_probability_24_48h ??
+      0
+    );
 
-  const crop = telemetry.crop_type || "Tomato";
-  const landSize = telemetry.land_size_m2 ?? 100;
+  const crop =
+    data.crop ||
+    data.crop_type ||
+    "Tomato";
 
-  const recommendedStart =
-    schedule.recommended_start || "06:00";
+  const need =
+    data.need_level ||
+    data.irrigation_need ||
+    "MEDIUM";
 
-  const recommendedEnd =
-    schedule.recommended_end || "--";
+  const irrigationDepth =
+    Number(
+      data.irrigation_depth_mm ??
+      data.recommended_depth_mm ??
+      data.recommended_daily_depth_mm ??
+      0
+    );
 
   const waterRequired =
-    schedule.water_required_L ?? 0;
+    Number(
+      data.water_required_l ??
+      data.water_required_liters ??
+      data.water_required ??
+      0
+    );
 
   const pumpRuntime =
-    schedule.pump_runtime_min ?? 0;
+    Number(
+      schedule.pump_runtime_min ??
+      data.pump_runtime_min ??
+      0
+    );
 
   const pumpFlow =
-    schedule.pump_flow_L_min ?? 0;
+    Number(
+      schedule.pump_flow_l_min ??
+      data.pump_flow_l_min ??
+      0
+    );
 
-  const needLevel =
-    schedule.need_level ||
-    schedule.irrigation_need ||
-    "Unknown";
+  const recommendedStart =
+    schedule.recommended_start ||
+    data.recommended_start ||
+    "06:00";
+
+  const recommendedEnd =
+    schedule.recommended_end ||
+    data.recommended_end ||
+    "07:00";
+
+
+  /* =======================================================
+     HELPER VALUES
+     ======================================================= */
+
+  const rain24ProbabilityText =
+    Math.round(rainProbability24 * 100);
+
+  const rain48ProbabilityText =
+    Math.round(rainProbability48 * 100);
+
+
+  /*
+   * Some APIs return probability as 0–1.
+   * Others return 0–100.
+   * This keeps the dashboard correct either way.
+   */
+
+  const probabilityToPercent = (value) => {
+    const number = Number(value || 0);
+
+    if (number <= 1) {
+      return Math.round(number * 100);
+    }
+
+    return Math.round(number);
+  };
+
+
+  const rain24Percent =
+    probabilityToPercent(rainProbability24);
+
+  const rain48Percent =
+    probabilityToPercent(rainProbability48);
+
+
+  /* =======================================================
+     APP
+     ======================================================= */
 
   return (
     <div className="app">
 
-      {/* SIDEBAR */}
+      {/* ===================================================
+          SIDEBAR
+          =================================================== */}
+
       <aside className="sidebar">
 
         <div className="brand">
-          <div className="brandmark">A</div>
+          <div className="brand-mark">A</div>
 
           <div>
-            <b>Agromind</b>
+            <strong>Agromind</strong>
             <span>Smart Agriculture</span>
           </div>
         </div>
 
+
         <nav>
-          <a className="active">Overview</a>
-          <a>Farm Map</a>
-          <a>Irrigation</a>
-          <a>Weather</a>
-          <a>Plant Health</a>
+
+          <a className="active" href="#">
+            Overview
+          </a>
+
+          <a href="#farm">
+            Farm Map
+          </a>
+
+          <a href="#irrigation">
+            Irrigation
+          </a>
+
+          <a href="#weather">
+            Weather
+          </a>
+
+          <a href="#plant-health">
+            Plant Health
+          </a>
+
         </nav>
 
-        <div className="sidecard">
+
+        <div className="side-card">
+
           <span>
-            ● <strong>Online</strong>
+            <span className="status-dot"></span>
+            <strong>Online</strong>
           </span>
 
           <small>
-            AOSIS v14 · Clay loam
+            AOSIS v14 • Clay loam
           </small>
+
         </div>
 
       </aside>
 
 
-      {/* MAIN */}
+      {/* ===================================================
+          MAIN CONTENT
+          =================================================== */}
+
       <main>
 
-        {/* HEADER */}
+
+        {/* =================================================
+            HEADER
+            ================================================= */}
+
         <header>
 
-          <div>
-            <div className="eyebrow">
-              AI-OPTIMIZED IRRIGATION
-            </div>
-
-            <h1>
-              Good morning, Farmer.
-            </h1>
-
-            <p>
-              Here's what your farm needs today.
-            </p>
+          <div className="eyebrow">
+            AI-OPTIMIZED IRRIGATION
           </div>
+
+          <h1>
+            Good morning, Farmer.
+          </h1>
+
+          <p>
+            Here's what your farm needs today.
+          </p>
+
 
           <button
             className="refresh"
-            onClick={load}
-            disabled={loading}
+            onClick={loadDashboard}
           >
             <RefreshCw size={16} />
-
-            {loading ? "Updating..." : "Refresh"}
+            Refresh
           </button>
 
         </header>
 
 
-        {/* ERROR */}
-        {error && (
-          <div className="error">
-            <strong>Dashboard connection problem</strong>
-            <span>{error}</span>
-          </div>
-        )}
 
+        {/* =================================================
+            HERO / RECOMMENDATION
+            ================================================= */}
 
-        {/* HERO */}
         <section className="hero">
 
           <div className="hero-content">
@@ -184,117 +378,132 @@ function App() {
 
             <div className="recommendation">
 
-              <span className="dot"></span>
+              <span className="dot">
+                {need}
+              </span>
 
-              <b>Need</b>
+              <strong>
+                {irrigationDepth
+                  ? irrigationDepth.toFixed(3)
+                  : "0.000"}{" "}
+                mm
+              </strong>
 
-              <span>
-                {needLevel}
+              <span className="need-label">
+                Recommended daily application depth
               </span>
 
             </div>
 
-            <h2>
-              {schedule.irrigation_depth_mm ?? "--"} mm
-            </h2>
 
-            <small>
-              Recommended daily application depth
-            </small>
+            <div className="hero-actions">
 
-          </div>
-
-
-          <div className="hero-actions">
-
-            <button
-              onClick={() => setManual(true)}
-            >
-              <Droplets size={17} />
-              Irrigate Now
-            </button>
-
-            <button
-              className="ghost"
-              onClick={() =>
-                document
-                  .querySelector(".schedulebar")
-                  ?.scrollIntoView({
-                    behavior: "smooth",
-                  })
-              }
-            >
-              View Schedule
-              <ChevronRight size={16} />
-            </button>
-
-          </div>
+              <button
+                className="primary-button"
+                onClick={() => setManual(true)}
+              >
+                <Droplets size={17} />
+                Irrigate Now
+              </button>
 
 
-          <div className="hero-water">
+              <button
+                className="ghost-button"
+                onClick={() =>
+                  document
+                    .getElementById("irrigation")
+                    ?.scrollIntoView({
+                      behavior: "smooth",
+                    })
+                }
+              >
+                View Schedule
+                <ChevronRight size={17} />
+              </button>
 
-            <div className="ring">
-              <Droplets size={34} />
-
-              <strong>
-                {waterRequired}
-              </strong>
-
-              <span>Litres</span>
             </div>
+
+          </div>
+
+
+          <div className="water-ring">
+
+            <Droplets size={32} />
+
+            <strong>
+              {waterRequired
+                ? waterRequired.toFixed(2)
+                : "0.00"}
+            </strong>
+
+            <span>
+              Litres
+            </span>
 
           </div>
 
         </section>
 
 
-        {/* METRICS */}
+
+        {/* =================================================
+            TELEMETRY GRID
+            ================================================= */}
+
         <div className="grid">
+
 
           <Metric
             icon={<Droplets />}
             label="Soil Moisture"
-            value={soilMoisture}
+            value={soilMoisture.toFixed(0)}
             unit="%"
             sub="Live sensor"
           />
 
+
           <Metric
             icon={<Thermometer />}
             label="Soil Temperature"
-            value={soilTemperature}
+            value={soilTemperature.toFixed(1)}
             unit="°C"
             sub="ESP32-S3"
           />
 
+
           <Metric
             icon={<Sun />}
             label="Solar Irradiance"
-            value={solarIrradiance}
+            value={solarIrradiance.toFixed(0)}
             unit="W/m²"
             sub="OpenWeather"
           />
 
+
           <Metric
             icon={<CloudRain />}
             label="Rain - 48 hours"
-            value={rain48}
+            value={rain48.toFixed(1)}
             unit="mm"
-            sub={`${Math.round(
-              rainProbability48 * 100
-            )}% probability`}
+            sub={`${rain48Percent}% probability`}
           />
 
         </div>
 
 
-        {/* TWO COLUMN SECTION */}
-        <div className="two">
 
-          {/* FORECAST */}
+        {/* =================================================
+            WEATHER / FORECAST
+            ================================================= */}
+
+        <div
+          className="two"
+          id="weather"
+        >
+
           <section className="panel">
 
-            <div className="panelhead">
+            <div className="panel-head">
 
               <div>
                 <h3>
@@ -306,48 +515,42 @@ function App() {
                 </span>
               </div>
 
-              <CloudRain size={20} />
+              <CloudRain />
 
             </div>
 
 
             <div className="forecast">
 
-              <div className="forecast-row">
+              <div>
 
                 <span>
                   Next 24h
                 </span>
 
                 <b>
-                  {rain24} mm
+                  {rain24.toFixed(1)} mm
                 </b>
 
                 <small>
-                  {Math.round(
-                    rainProbability24 * 100
-                  )}
-                  % probability
+                  {rain24Percent}% probability
                 </small>
 
               </div>
 
 
-              <div className="forecast-row">
+              <div>
 
                 <span>
                   24–48h
                 </span>
 
                 <b>
-                  {rain48} mm
+                  {rain48.toFixed(1)} mm
                 </b>
 
                 <small>
-                  {Math.round(
-                    rainProbability48 * 100
-                  )}
-                  % probability
+                  {rain48Percent}% probability
                 </small>
 
               </div>
@@ -370,22 +573,31 @@ function App() {
           </section>
 
 
-          {/* FARM VISUALIZATION */}
-          <section className="panel">
 
-            <div className="panelhead">
+          {/* =================================================
+              FARM VISUALIZATION
+              ================================================= */}
+
+          <section
+            className="panel"
+            id="farm"
+          >
+
+            <div className="panel-head">
 
               <div>
+
                 <h3>
                   Farm visualization
                 </h3>
 
                 <span>
-                  {landSize} m² · {crop}
+                  100 m² • {crop}
                 </span>
+
               </div>
 
-              <Map size={20} />
+              <Map />
 
             </div>
 
@@ -394,29 +606,34 @@ function App() {
 
               <div className="farm-grid">
 
-                {Array.from({ length: 24 }).map(
-                  (_, index) => (
-                    <div
-                      key={index}
-                      className={
-                        index % 7 === 0
-                          ? "plot wet"
-                          : "plot"
-                      }
-                    />
-                  )
-                )}
+                {Array.from({
+                  length: 24,
+                }).map((_, index) => (
+
+                  <div
+                    key={index}
+                    className={
+                      index % 7 === 0
+                        ? "plot dry"
+                        : "plot"
+                    }
+                  />
+
+                ))}
 
               </div>
 
-              <div className="farmlabel">
-                <span>
+
+              <div className="farm-label">
+
+                <strong>
                   ZONE A
+                </strong>
+
+                <span>
+                  Live monitoring
                 </span>
 
-                <small>
-                  Live monitoring
-                </small>
               </div>
 
             </div>
@@ -426,8 +643,15 @@ function App() {
         </div>
 
 
-        {/* SCHEDULE */}
-        <section className="schedulebar">
+
+        {/* =================================================
+            IRRIGATION SCHEDULE
+            ================================================= */}
+
+        <section
+          className="schedulebar"
+          id="irrigation"
+        >
 
           <div>
 
@@ -440,9 +664,17 @@ function App() {
             </strong>
 
             <small>
-              {waterRequired} L ·{" "}
-              {pumpRuntime} minutes ·{" "}
-              {pumpFlow} L/min
+              {waterRequired
+                ? `${waterRequired.toFixed(2)} L`
+                : "Water requirement unavailable"}
+              {" • "}
+              {pumpRuntime
+                ? `${pumpRuntime} minutes`
+                : "Runtime unavailable"}
+              {" • "}
+              {pumpFlow
+                ? `${pumpFlow.toFixed(2)} L/min`
+                : "Flow rate unavailable"}
             </small>
 
           </div>
@@ -458,81 +690,128 @@ function App() {
         </section>
 
 
-        {/* FOOTER INFORMATION */}
-        <section className="info-grid">
 
-          <div className="info-card">
+        {/* =================================================
+            EXTRA WEATHER INFORMATION
+            ================================================= */}
 
-            <span className="eyebrow">
-              WEATHER
-            </span>
+        <section className="panel weather-summary">
 
-            <h3>
-              Rainfall-aware irrigation
-            </h3>
+          <div className="panel-head">
 
-            <p>
-              Weather forecasts are considered before
-              Agromind determines the irrigation requirement.
-            </p>
+            <div>
 
-          </div>
+              <h3>
+                Current weather
+              </h3>
 
+              <span>
+                OpenWeather
+              </span>
 
-          <div className="info-card">
+            </div>
 
-            <span className="eyebrow">
-              SOLAR POWER
-            </span>
-
-            <h3>
-              Energy-aware scheduling
-            </h3>
-
-            <p>
-              Pump operation is scheduled around available
-              solar energy whenever possible.
-            </p>
+            <Gauge />
 
           </div>
 
 
-          <div className="info-card">
+          <div className="weather-details">
 
-            <span className="eyebrow">
-              AI MODEL
-            </span>
+            <div>
+              <span>
+                Temperature
+              </span>
 
-            <h3>
-              Random Forest
-            </h3>
+              <strong>
+                {Number(
+                  t.current_temperature_c ??
+                  t.temperature_c ??
+                  0
+                ).toFixed(1)}
+                °C
+              </strong>
+            </div>
 
-            <p>
-              Agromind combines soil, weather, crop and
-              farm information to recommend irrigation.
-            </p>
+
+            <div>
+              <span>
+                Humidity
+              </span>
+
+              <strong>
+                {Number(
+                  t.current_humidity_pct ??
+                  t.humidity_pct ??
+                  0
+                ).toFixed(0)}
+                %
+              </strong>
+            </div>
+
+
+            <div>
+              <span>
+                Rain probability
+              </span>
+
+              <strong>
+                {rain24Percent}%
+              </strong>
+            </div>
+
+
+            <div>
+              <span>
+                Solar
+              </span>
+
+              <strong>
+                {solarIrradiance.toFixed(0)}
+                {" "}
+                W/m²
+              </strong>
+            </div>
 
           </div>
 
         </section>
 
+
+
+        {/* =================================================
+            FOOTER
+            ================================================= */}
+
+        <footer>
+
+          <span>
+            Agromind • AI-Optimized Solar Irrigation Scheduler
+          </span>
+
+          <span>
+            AOSIS v14
+          </span>
+
+        </footer>
+
       </main>
 
 
-      {/* MANUAL IRRIGATION MODAL */}
+
+      {/* ===================================================
+          MANUAL IRRIGATION MODAL
+          =================================================== */}
+
       {manual && (
 
-        <div
-          className="modal"
-          onClick={() => setManual(false)}
-        >
+        <div className="modal">
 
-          <div
-            className="modalbox"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
+          <div className="modalbox">
+
+            <div className="modal-icon">
+              <Droplets size={30} />
+            </div>
 
             <h2>
               Manual Irrigation
@@ -547,18 +826,24 @@ function App() {
             <div className="manual-info">
 
               <div>
-                <span>Farm</span>
-                <strong>{landSize} m²</strong>
+                <span>
+                  Recommended water
+                </span>
+
+                <strong>
+                  {waterRequired.toFixed(2)} L
+                </strong>
               </div>
 
-              <div>
-                <span>Crop</span>
-                <strong>{crop}</strong>
-              </div>
 
               <div>
-                <span>Recommended water</span>
-                <strong>{waterRequired} L</strong>
+                <span>
+                  Recommended runtime
+                </span>
+
+                <strong>
+                  {pumpRuntime || "--"} min
+                </strong>
               </div>
 
             </div>
@@ -567,16 +852,25 @@ function App() {
             <div className="modal-actions">
 
               <button
-                className="ghost"
+                className="ghost-button"
                 onClick={() => setManual(false)}
               >
                 Cancel
               </button>
 
+
               <button
+                className="primary-button"
                 onClick={() => {
+
+                  /*
+                   * At this stage the modal is intentionally
+                   * local. Your ESP32/pump endpoint can be
+                   * connected here later.
+                   */
+
                   alert(
-                    "Manual irrigation command queued."
+                    "Manual irrigation command ready."
                   );
 
                   setManual(false);
@@ -599,7 +893,10 @@ function App() {
 }
 
 
-/* METRIC COMPONENT */
+
+/* =========================================================
+   METRIC COMPONENT
+   ========================================================= */
 
 function Metric({
   icon,
@@ -608,22 +905,23 @@ function Metric({
   unit,
   sub,
 }) {
+
   return (
+
     <div className="metric">
 
       <div className="metric-icon">
         {icon}
       </div>
 
-      <div className="metric-content">
+      <div>
 
         <span>
           {label}
         </span>
 
         <strong>
-          {value ?? "--"}
-
+          {value}
           <small>
             {unit}
           </small>
@@ -636,9 +934,15 @@ function Metric({
       </div>
 
     </div>
+
   );
 }
 
+
+
+/* =========================================================
+   REACT ROOT
+   ========================================================= */
 
 createRoot(
   document.getElementById("root")
