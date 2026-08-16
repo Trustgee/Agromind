@@ -7,35 +7,55 @@ const API_URL =
 
 const CROP_OPTIONS = ["Tomato", "Pepper"];
 
-const DEFAULT_TELEMETRY = {
-  soil_moisture_pct: 42,
-  soil_temperature_C: 28.7,
-  solar_irradiance_W_m2: 620,
-
-  rain_0_24h_mm: 0,
-  rain_probability_0_24h: 0.10,
-
-  rain_24_48h_mm: 8,
-  rain_probability_24_48h: 0.75,
-
+const DEFAULT_FARM = {
   crop_type: "Tomato",
   crop_age_days: 60,
   land_size_m2: 100,
-
   pump_flow_L_min: 10,
   application_efficiency: 0.75,
-
   start_time: "06:00",
 };
 
+const DEFAULT_TELEMETRY = {
+  soil_moisture_pct: 0,
+  soil_temperature_C: 0,
+  humidity_pct: 0,
+  soil_adc: null,
+  water_sensor_adc: null,
+  water_level_pct: 0,
+  water_remaining_L: 0,
+  water_status: "UNKNOWN",
+  solar_irradiance_W_m2: 0,
+  rain_0_24h_mm: 0,
+  rain_probability_0_24h: 0,
+  rain_24_48h_mm: 0,
+  rain_probability_24_48h: 0,
+  last_update: null,
+};
+
+function readFarm() {
+  try {
+    const saved = localStorage.getItem("agromind_farm");
+
+    return saved
+      ? { ...DEFAULT_FARM, ...JSON.parse(saved) }
+      : DEFAULT_FARM;
+  } catch {
+    return DEFAULT_FARM;
+  }
+}
 
 function App() {
+  const [farm, setFarm] = useState(readFarm);
 
   const [telemetry, setTelemetry] =
     useState(DEFAULT_TELEMETRY);
 
   const [schedule, setSchedule] =
     useState(null);
+
+  const [telemetrySource, setTelemetrySource] =
+    useState("DEMO");
 
   const [loading, setLoading] =
     useState(true);
@@ -49,42 +69,74 @@ function App() {
   const [manualMode, setManualMode] =
     useState(false);
 
-  const [irrigating, setIrrigating] =
-    useState(false);
+  const [activeSection, setActiveSection] =
+    useState("overview");
 
 
-  // ==========================================================
-  // LOAD CURRENT DASHBOARD
-  // ==========================================================
+  // ============================================================
+  // SAVE FARM SETTINGS
+  // ============================================================
 
-  async function loadDashboard() {
+  useEffect(() => {
+
+    localStorage.setItem(
+      "agromind_farm",
+      JSON.stringify(farm)
+    );
+
+  }, [farm]);
+
+
+  // ============================================================
+  // LOAD DASHBOARD
+  // ============================================================
+
+  async function loadDashboard(
+    showLoading = true
+  ) {
 
     try {
 
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
+
       setError("");
 
       const response = await fetch(
-        `${API_URL}/api/dashboard`
+        `${API_URL}/api/dashboard`,
+        {
+          cache: "no-store",
+        }
       );
 
       if (!response.ok) {
+
         throw new Error(
           `API returned ${response.status}`
         );
+
       }
 
       const result =
         await response.json();
+
 
       setTelemetry({
         ...DEFAULT_TELEMETRY,
         ...(result.telemetry || {}),
       });
 
+
+      setTelemetrySource(
+        result.telemetry_source || "DEMO"
+      );
+
+
       setSchedule(
         result.schedule || null
       );
+
 
     } catch (err) {
 
@@ -94,34 +146,70 @@ function App() {
         "Unable to connect to the Agromind API."
       );
 
+
     } finally {
 
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
 
     }
+
   }
 
 
-  // ==========================================================
-  // INITIAL LOAD
-  // ==========================================================
+  // ============================================================
+  // START DASHBOARD + AUTO REFRESH
+  // ============================================================
 
   useEffect(() => {
 
-    loadDashboard();
+    loadDashboard(true);
+
+    const interval =
+      setInterval(() => {
+
+        loadDashboard(false);
+
+      }, 5000);
+
+
+    return () =>
+      clearInterval(interval);
 
   }, []);
 
 
-  // ==========================================================
-  // UPDATE RECOMMENDATION
-  // ==========================================================
+  // ============================================================
+  // UPDATE FARM VALUE
+  // ============================================================
+
+  function updateFarm(
+    key,
+    value
+  ) {
+
+    setFarm((previous) => ({
+
+      ...previous,
+
+      [key]: value,
+
+    }));
+
+  }
+
+
+  // ============================================================
+  // UPDATE AI RECOMMENDATION
+  // ============================================================
 
   async function updateRecommendation() {
 
     try {
 
       setUpdating(true);
+
       setError("");
 
 
@@ -163,50 +251,52 @@ function App() {
           ),
 
         crop_type:
-          telemetry.crop_type,
+          farm.crop_type,
 
         crop_age_days:
           Number(
-            telemetry.crop_age_days
+            farm.crop_age_days
           ),
 
         land_size_m2:
           Number(
-            telemetry.land_size_m2
+            farm.land_size_m2
           ),
 
         pump_flow_L_min:
           Number(
-            telemetry.pump_flow_L_min
+            farm.pump_flow_L_min
           ),
 
         application_efficiency:
           Number(
-            telemetry.application_efficiency
+            farm.application_efficiency
           ),
 
         start_time:
-          telemetry.start_time || "06:00",
+          farm.start_time ||
+          "06:00",
+
       };
 
 
-      // --------------------------------------------
-      // SEND FARM SETTINGS TO BACKEND
-      // --------------------------------------------
+      const response =
+        await fetch(
+          `${API_URL}/api/schedule`,
+          {
 
-      const response = await fetch(
-        `${API_URL}/api/schedule`,
-        {
-          method: "POST",
+            method: "POST",
 
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-          body: JSON.stringify(payload),
-        }
-      );
+            body:
+              JSON.stringify(payload),
+
+          }
+        );
 
 
       const result =
@@ -225,6 +315,7 @@ function App() {
 
       setSchedule(result);
 
+
     } catch (err) {
 
       console.error(err);
@@ -234,19 +325,23 @@ function App() {
         "Unable to update recommendation"
       );
 
+
     } finally {
 
       setUpdating(false);
 
     }
+
   }
 
 
-  // ==========================================================
+  // ============================================================
   // SIDEBAR NAVIGATION
-  // ==========================================================
+  // ============================================================
 
   function scrollToSection(id) {
+
+    setActiveSection(id);
 
     document
       .getElementById(id)
@@ -258,13 +353,17 @@ function App() {
   }
 
 
-  // ==========================================================
+  // ============================================================
   // FORMATTERS
-  // ==========================================================
+  // ============================================================
 
-  function number(value, decimals = 1) {
+  function number(
+    value,
+    decimals = 1
+  ) {
 
-    const n = Number(value);
+    const n =
+      Number(value);
 
     if (!Number.isFinite(n)) {
       return "0";
@@ -286,7 +385,8 @@ function App() {
 
   function percent(value) {
 
-    const n = Number(value);
+    const n =
+      Number(value);
 
     if (!Number.isFinite(n)) {
       return "0%";
@@ -297,9 +397,9 @@ function App() {
   }
 
 
-  // ==========================================================
+  // ============================================================
   // CALCULATED VALUES
-  // ==========================================================
+  // ============================================================
 
   const irrigationDepth =
     Number(
@@ -322,7 +422,7 @@ function App() {
   const pumpFlow =
     Number(
       schedule?.pump_flow_L_min ??
-      telemetry.pump_flow_L_min ??
+      farm.pump_flow_L_min ??
       0
     );
 
@@ -332,26 +432,56 @@ function App() {
     "MEDIUM";
 
 
-  // ==========================================================
-  // IRRIGATE BUTTON
-  // ==========================================================
+  // ============================================================
+  // ESP32 STATUS
+  // ============================================================
 
-  function irrigateNow() {
-
-    setIrrigating(true);
-
-    setTimeout(() => {
-
-      setIrrigating(false);
-
-    }, 2500);
-
-  }
+  const isRealEsp32 =
+    String(
+      telemetrySource
+    )
+      .toUpperCase()
+      .includes("ESP32");
 
 
-  // ==========================================================
+  // ============================================================
+  // WATER TANK
+  // ============================================================
+
+  const waterLevel =
+    Number(
+      telemetry.water_level_pct ?? 0
+    );
+
+
+  const waterRemaining =
+    Number(
+      telemetry.water_remaining_L ?? 0
+    );
+
+
+  const waterStatus =
+    telemetry.water_status ||
+    (
+      waterLevel <= 10
+        ? "CRITICAL"
+        : waterLevel <= 25
+        ? "LOW"
+        : "NORMAL"
+    );
+
+
+  const waterStatusClass =
+    waterStatus === "CRITICAL"
+      ? "critical"
+      : waterStatus === "LOW"
+      ? "low"
+      : "normal";
+
+
+  // ============================================================
   // UI
-  // ==========================================================
+  // ============================================================
 
   return (
 
@@ -369,6 +499,7 @@ function App() {
 
         body {
           margin: 0;
+
           font-family:
             Inter,
             -apple-system,
@@ -391,36 +522,42 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            APP
-        ================================================== */
+        ================================================ */
 
         .agro-app {
           min-height: 100vh;
+
           display: flex;
+
           background: #f5f7f3;
         }
 
 
-        /* ==================================================
+        /* ================================================
            SIDEBAR
-        ================================================== */
+        ================================================ */
 
         .sidebar {
           width: 250px;
+
           min-height: 100vh;
 
           position: fixed;
+
           left: 0;
           top: 0;
           bottom: 0;
 
           background: #102117;
+
           color: white;
 
           padding: 28px 18px;
 
           display: flex;
+
           flex-direction: column;
 
           z-index: 20;
@@ -435,45 +572,53 @@ function App() {
 
         .brand-small {
           font-size: 10px;
+
           color: #b9d95b;
 
           text-transform:
             uppercase;
 
           letter-spacing: 2px;
+
           font-weight: 800;
         }
 
 
         .brand-name {
           font-size: 26px;
+
           font-weight: 850;
+
           margin-top: 7px;
         }
 
 
         .brand-subtitle {
           color: #8fa396;
+
           font-size: 12px;
+
           margin-top: 5px;
         }
 
 
         .nav {
           display: flex;
+
           flex-direction: column;
+
           gap: 7px;
         }
 
 
         .nav-button {
           border: none;
+
           background: transparent;
 
           color: #d8e1db;
 
-          padding:
-            14px;
+          padding: 14px;
 
           border-radius: 12px;
 
@@ -482,27 +627,39 @@ function App() {
           font-weight: 650;
 
           display: flex;
+
           align-items: center;
+
           gap: 12px;
 
-          transition: 0.2s;
+          transition: .2s;
         }
 
 
         .nav-button:hover {
           background:
-            rgba(255,255,255,0.08);
+            rgba(255,255,255,.09);
+
+          color: white;
+        }
+
+
+        .nav-button.active {
+          background:
+            rgba(255,255,255,.09);
 
           color: white;
 
-          transform:
-            translateX(2px);
+          box-shadow:
+            inset 3px 0 #b9ef17;
         }
 
 
         .nav-icon {
           width: 24px;
+
           text-align: center;
+
           font-size: 17px;
         }
 
@@ -515,7 +672,7 @@ function App() {
 
           border-top:
             1px solid
-            rgba(255,255,255,0.1);
+            rgba(255,255,255,.1);
         }
 
 
@@ -525,31 +682,45 @@ function App() {
 
           display: inline-block;
 
-          background: #b8ef20;
-
           border-radius: 50%;
 
           margin-right: 8px;
+
+          background: #b8ef20;
+        }
+
+
+        .online-dot.demo {
+          background: #f0ad27;
         }
 
 
         .online-text {
           color: #b8ef20;
+
           font-size: 12px;
+
           font-weight: 800;
+        }
+
+
+        .online-text.demo {
+          color: #f0ad27;
         }
 
 
         .model-text {
           color: #8fa396;
+
           font-size: 11px;
+
           margin-top: 9px;
         }
 
 
-        /* ==================================================
+        /* ================================================
            MAIN
-        ================================================== */
+        ================================================ */
 
         .main {
           margin-left: 250px;
@@ -564,10 +735,13 @@ function App() {
 
         .topbar {
           display: flex;
-          align-items: center;
-          justify-content: space-between;
 
-          margin-bottom: 30px;
+          align-items: center;
+
+          justify-content:
+            space-between;
+
+          margin-bottom: 20px;
 
           gap: 20px;
         }
@@ -602,7 +776,9 @@ function App() {
 
         .page-subtitle {
           color: #718078;
-          margin: 8px 0 0;
+
+          margin:
+            8px 0 0;
         }
 
 
@@ -623,9 +799,73 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
+           CONNECTION
+        ================================================ */
+
+        .connection-bar {
+          display: flex;
+
+          align-items: center;
+
+          justify-content:
+            space-between;
+
+          gap: 12px;
+
+          background: white;
+
+          border:
+            1px solid #e2e8e2;
+
+          border-radius: 14px;
+
+          padding:
+            12px 16px;
+
+          margin-bottom: 20px;
+
+          font-size: 12px;
+        }
+
+
+        .connection-left {
+          display: flex;
+
+          align-items: center;
+
+          gap: 9px;
+
+          font-weight: 800;
+        }
+
+
+        .connection-led {
+          width: 9px;
+          height: 9px;
+
+          border-radius: 50%;
+
+          background: #f0ad27;
+        }
+
+
+        .connection-led.live {
+          background: #58c72d;
+
+          box-shadow:
+            0 0 0 4px #e8f6e3;
+        }
+
+
+        .connection-time {
+          color: #8a968f;
+        }
+
+
+        /* ================================================
            CONFIGURATION
-        ================================================== */
+        ================================================ */
 
         .configuration {
           background: white;
@@ -637,11 +877,11 @@ function App() {
 
           padding: 24px;
 
-          margin-bottom: 26px;
+          margin-bottom: 22px;
 
           box-shadow:
             0 5px 20px
-            rgba(27,55,38,0.04);
+            rgba(27,55,38,.035);
         }
 
 
@@ -666,7 +906,7 @@ function App() {
           display: grid;
 
           grid-template-columns:
-            repeat(4, 1fr);
+            repeat(4,1fr);
 
           gap: 15px;
 
@@ -709,23 +949,13 @@ function App() {
         }
 
 
-        .field input:focus,
-        .field select:focus {
-          border-color: #9bc62c;
-
-          box-shadow:
-            0 0 0 3px
-            rgba(155,198,44,0.12);
-        }
-
-
         .input-unit {
           position: relative;
         }
 
 
         .input-unit input {
-          padding-right: 50px;
+          padding-right: 55px;
         }
 
 
@@ -762,25 +992,19 @@ function App() {
           color: #17230e;
 
           font-weight: 850;
-
-          white-space: nowrap;
-        }
-
-
-        .update-button:hover {
-          background: #a9dc10;
         }
 
 
         .update-button:disabled {
-          opacity: 0.6;
+          opacity: .6;
+
           cursor: wait;
         }
 
 
-        /* ==================================================
+        /* ================================================
            HERO
-        ================================================== */
+        ================================================ */
 
         .hero {
           background:
@@ -810,7 +1034,7 @@ function App() {
 
           box-shadow:
             0 15px 40px
-            rgba(8,47,29,0.15);
+            rgba(8,47,29,.15);
 
           margin-bottom: 22px;
         }
@@ -908,10 +1132,10 @@ function App() {
         .secondary-button {
           border:
             1px solid
-            rgba(255,255,255,0.18);
+            rgba(255,255,255,.18);
 
           background:
-            rgba(255,255,255,0.08);
+            rgba(255,255,255,.08);
 
           color: white;
 
@@ -925,7 +1149,7 @@ function App() {
 
 
         .water-total {
-          min-width: 220px;
+          min-width: 240px;
 
           text-align: center;
 
@@ -933,12 +1157,12 @@ function App() {
 
           border:
             1px solid
-            rgba(255,255,255,0.12);
+            rgba(255,255,255,.12);
 
           border-radius: 18px;
 
           background:
-            rgba(255,255,255,0.04);
+            rgba(255,255,255,.04);
         }
 
 
@@ -958,15 +1182,15 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            SENSOR CARDS
-        ================================================== */
+        ================================================ */
 
         .cards {
           display: grid;
 
           grid-template-columns:
-            repeat(4, 1fr);
+            repeat(4,1fr);
 
           gap: 16px;
 
@@ -988,7 +1212,7 @@ function App() {
 
           box-shadow:
             0 5px 20px
-            rgba(27,55,38,0.035);
+            rgba(27,55,38,.035);
         }
 
 
@@ -1003,6 +1227,7 @@ function App() {
           display: flex;
 
           align-items: center;
+
           justify-content: center;
 
           margin-bottom: 16px;
@@ -1036,15 +1261,15 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            PANELS
-        ================================================== */
+        ================================================ */
 
         .two-column {
           display: grid;
 
           grid-template-columns:
-            1.15fr 0.85fr;
+            1.15fr .85fr;
 
           gap: 18px;
 
@@ -1064,7 +1289,7 @@ function App() {
 
           box-shadow:
             0 5px 20px
-            rgba(27,55,38,0.035);
+            rgba(27,55,38,.035);
         }
 
 
@@ -1084,9 +1309,9 @@ function App() {
         }
 
 
-        /* ==================================================
-           FORECAST
-        ================================================== */
+        /* ================================================
+           WEATHER
+        ================================================ */
 
         .forecast-row {
           display: grid;
@@ -1145,7 +1370,8 @@ function App() {
         .rain-note {
           margin-top: 15px;
 
-          padding: 12px 14px;
+          padding:
+            12px 14px;
 
           background: #f1f7df;
 
@@ -1157,15 +1383,15 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            INSIGHTS
-        ================================================== */
+        ================================================ */
 
         .insight-grid {
           display: grid;
 
           grid-template-columns:
-            repeat(2, 1fr);
+            repeat(2,1fr);
 
           gap: 12px;
 
@@ -1203,9 +1429,103 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
+           WATER TANK
+        ================================================ */
+
+        .tank-panel {
+          margin-bottom: 22px;
+        }
+
+
+        .tank-head {
+          display: flex;
+
+          justify-content:
+            space-between;
+
+          align-items: center;
+
+          gap: 15px;
+        }
+
+
+        .tank-status {
+          padding:
+            6px 10px;
+
+          border-radius: 999px;
+
+          font-size: 10px;
+
+          font-weight: 850;
+        }
+
+
+        .tank-status.normal {
+          background: #edf7df;
+
+          color: #4e7021;
+        }
+
+
+        .tank-status.low {
+          background: #fff4d9;
+
+          color: #8a6515;
+        }
+
+
+        .tank-status.critical {
+          background: #ffe8e4;
+
+          color: #a23d31;
+        }
+
+
+        .tank-bar {
+          height: 18px;
+
+          border-radius: 999px;
+
+          background: #edf1ed;
+
+          overflow: hidden;
+
+          margin-top: 18px;
+        }
+
+
+        .tank-fill {
+          height: 100%;
+
+          border-radius: 999px;
+
+          background: #8fcf32;
+
+          transition: width .5s;
+        }
+
+
+        .tank-meta {
+          display: flex;
+
+          justify-content:
+            space-between;
+
+          gap: 10px;
+
+          margin-top: 9px;
+
+          color: #748078;
+
+          font-size: 12px;
+        }
+
+
+        /* ================================================
            PUMP
-        ================================================== */
+        ================================================ */
 
         .pump {
           display: flex;
@@ -1262,7 +1582,7 @@ function App() {
         .manual-button {
           border:
             1px solid
-            rgba(255,255,255,0.15);
+            rgba(255,255,255,.15);
 
           background: white;
 
@@ -1282,9 +1602,9 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            PLANT HEALTH
-        ================================================== */
+        ================================================ */
 
         .health-status {
           display: flex;
@@ -1323,7 +1643,7 @@ function App() {
           display: grid;
 
           grid-template-columns:
-            repeat(4, 1fr);
+            repeat(4,1fr);
 
           gap: 10px;
 
@@ -1356,14 +1676,15 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            ERROR
-        ================================================== */
+        ================================================ */
 
         .error {
           margin-bottom: 18px;
 
-          padding: 12px 15px;
+          padding:
+            12px 15px;
 
           background: #fff2f0;
 
@@ -1378,20 +1699,16 @@ function App() {
         }
 
 
-        /* ==================================================
+        /* ================================================
            MOBILE
-        ================================================== */
+        ================================================ */
 
-        @media (max-width: 1100px) {
+        @media (max-width:1100px) {
 
-          .configuration-grid {
-            grid-template-columns:
-              repeat(2, 1fr);
-          }
-
+          .configuration-grid,
           .cards {
             grid-template-columns:
-              repeat(2, 1fr);
+              repeat(2,1fr);
           }
 
           .two-column {
@@ -1400,13 +1717,13 @@ function App() {
 
           .health-list {
             grid-template-columns:
-              repeat(2, 1fr);
+              repeat(2,1fr);
           }
 
         }
 
 
-        @media (max-width: 800px) {
+        @media (max-width:800px) {
 
           .sidebar {
             width: 72px;
@@ -1448,7 +1765,7 @@ function App() {
         }
 
 
-        @media (max-width: 600px) {
+        @media (max-width:600px) {
 
           .configuration-grid,
           .cards,
@@ -1459,7 +1776,8 @@ function App() {
           }
 
           .topbar {
-            align-items: flex-start;
+            align-items:
+              flex-start;
           }
 
           .page-title {
@@ -1467,8 +1785,19 @@ function App() {
           }
 
           .pump {
-            align-items: flex-start;
-            flex-direction: column;
+            align-items:
+              flex-start;
+
+            flex-direction:
+              column;
+          }
+
+          .connection-bar {
+            align-items:
+              flex-start;
+
+            flex-direction:
+              column;
           }
 
         }
@@ -1505,11 +1834,18 @@ function App() {
           <nav className="nav">
 
             <button
-              className="nav-button"
+              className={
+                `nav-button ${
+                  activeSection === "overview"
+                    ? "active"
+                    : ""
+                }`
+              }
               onClick={() =>
                 scrollToSection("overview")
               }
             >
+
               <span className="nav-icon">
                 ⌂
               </span>
@@ -1517,15 +1853,23 @@ function App() {
               <span>
                 Overview
               </span>
+
             </button>
 
 
             <button
-              className="nav-button"
+              className={
+                `nav-button ${
+                  activeSection === "irrigation"
+                    ? "active"
+                    : ""
+                }`
+              }
               onClick={() =>
                 scrollToSection("irrigation")
               }
             >
+
               <span className="nav-icon">
                 💧
               </span>
@@ -1533,15 +1877,23 @@ function App() {
               <span>
                 Irrigation
               </span>
+
             </button>
 
 
             <button
-              className="nav-button"
+              className={
+                `nav-button ${
+                  activeSection === "weather"
+                    ? "active"
+                    : ""
+                }`
+              }
               onClick={() =>
                 scrollToSection("weather")
               }
             >
+
               <span className="nav-icon">
                 ☁
               </span>
@@ -1549,15 +1901,47 @@ function App() {
               <span>
                 Weather
               </span>
+
             </button>
 
 
             <button
-              className="nav-button"
+              className={
+                `nav-button ${
+                  activeSection === "water"
+                    ? "active"
+                    : ""
+                }`
+              }
+              onClick={() =>
+                scrollToSection("water")
+              }
+            >
+
+              <span className="nav-icon">
+                🚰
+              </span>
+
+              <span>
+                Water Tank
+              </span>
+
+            </button>
+
+
+            <button
+              className={
+                `nav-button ${
+                  activeSection === "plant-health"
+                    ? "active"
+                    : ""
+                }`
+              }
               onClick={() =>
                 scrollToSection("plant-health")
               }
             >
+
               <span className="nav-icon">
                 🌱
               </span>
@@ -1565,6 +1949,7 @@ function App() {
               <span>
                 Plant Health
               </span>
+
             </button>
 
           </nav>
@@ -1574,18 +1959,40 @@ function App() {
 
             <div>
 
-              <span className="online-dot"></span>
+              <span
+                className={
+                  `online-dot ${
+                    isRealEsp32
+                      ? ""
+                      : "demo"
+                  }`
+                }
+              />
 
-              <span className="online-text">
-                Online
+              <span
+                className={
+                  `online-text ${
+                    isRealEsp32
+                      ? ""
+                      : "demo"
+                  }`
+                }
+              >
+
+                {isRealEsp32
+                  ? "ESP32 Online"
+                  : "Demo Mode"}
+
               </span>
 
             </div>
 
 
             <div className="model-text">
+
               AOSIS-v14 •{" "}
-              {telemetry.crop_type}
+              {farm.crop_type}
+
             </div>
 
           </div>
@@ -1600,9 +2007,7 @@ function App() {
         <main className="main">
 
 
-          {/* ==================================================
-              HEADER
-          ================================================== */}
+          {/* HEADER */}
 
           <header
             className="topbar"
@@ -1620,7 +2025,11 @@ function App() {
               </h1>
 
               <p className="page-subtitle">
-                Here's what your farm needs today.
+
+                {isRealEsp32
+                  ? "Your ESP32-S3 is sending live farm data."
+                  : "Here's what your farm needs today."}
+
               </p>
 
             </div>
@@ -1628,16 +2037,61 @@ function App() {
 
             <button
               className="refresh-button"
-              onClick={loadDashboard}
+              onClick={() =>
+                loadDashboard(true)
+              }
               disabled={loading}
             >
+
               ↻{" "}
+
               {loading
                 ? "Refreshing..."
                 : "Refresh"}
+
             </button>
 
           </header>
+
+
+          {/* CONNECTION */}
+
+          <div className="connection-bar">
+
+            <div className="connection-left">
+
+              <span
+                className={
+                  `connection-led ${
+                    isRealEsp32
+                      ? "live"
+                      : ""
+                  }`
+                }
+              />
+
+              {isRealEsp32
+                ? "Live ESP32-S3 telemetry connected"
+                : "Waiting for ESP32-S3 telemetry"}
+
+            </div>
+
+
+            <div className="connection-time">
+
+              {telemetry.last_update
+
+                ? `Last update: ${
+                    new Date(
+                      telemetry.last_update
+                    ).toLocaleTimeString()
+                  }`
+
+                : "No live sensor update yet"}
+
+            </div>
+
+          </div>
 
 
           {error && (
@@ -1664,8 +2118,11 @@ function App() {
             </h2>
 
             <div className="section-description">
-              Enter the characteristics of the farmer's
+
+              These values describe the farmer's
               field and irrigation equipment.
+              They are not ESP32 sensor readings.
+
             </div>
 
 
@@ -1681,16 +2138,12 @@ function App() {
                 </label>
 
                 <select
-                  value={
-                    telemetry.crop_type
-                  }
+                  value={farm.crop_type}
                   onChange={(e) =>
-                    setTelemetry({
-                      ...telemetry,
-
-                      crop_type:
-                        e.target.value,
-                    })
+                    updateFarm(
+                      "crop_type",
+                      e.target.value
+                    )
                   }
                 >
 
@@ -1727,15 +2180,13 @@ function App() {
                     min="1"
                     step="1"
                     value={
-                      telemetry.land_size_m2
+                      farm.land_size_m2
                     }
                     onChange={(e) =>
-                      setTelemetry({
-                        ...telemetry,
-
-                        land_size_m2:
-                          e.target.value,
-                      })
+                      updateFarm(
+                        "land_size_m2",
+                        e.target.value
+                      )
                     }
                   />
 
@@ -1763,15 +2214,13 @@ function App() {
                     min="1"
                     step="1"
                     value={
-                      telemetry.crop_age_days
+                      farm.crop_age_days
                     }
                     onChange={(e) =>
-                      setTelemetry({
-                        ...telemetry,
-
-                        crop_age_days:
-                          e.target.value,
-                      })
+                      updateFarm(
+                        "crop_age_days",
+                        e.target.value
+                      )
                     }
                   />
 
@@ -1799,15 +2248,13 @@ function App() {
                     min="0.1"
                     step="0.1"
                     value={
-                      telemetry.pump_flow_L_min
+                      farm.pump_flow_L_min
                     }
                     onChange={(e) =>
-                      setTelemetry({
-                        ...telemetry,
-
-                        pump_flow_L_min:
-                          e.target.value,
-                      })
+                      updateFarm(
+                        "pump_flow_L_min",
+                        e.target.value
+                      )
                     }
                   />
 
@@ -1821,8 +2268,6 @@ function App() {
 
             </div>
 
-
-            {/* UPDATE BUTTON */}
 
             <button
               className="update-button"
@@ -1884,8 +2329,11 @@ function App() {
 
 
               <div className="hero-description">
+
                 Recommended daily application depth
-                for your current farm conditions.
+                based on live soil, weather and
+                crop conditions.
+
               </div>
 
 
@@ -1893,28 +2341,28 @@ function App() {
 
                 <button
                   className="primary-button"
-                  onClick={
-                    irrigateNow
-                  }
-                >
-
-                  💧{" "}
-                  {irrigating
-                    ? "Irrigating..."
-                    : "Irrigate Now"}
-
-                </button>
-
-
-                <button
-                  className="secondary-button"
                   onClick={() =>
                     scrollToSection(
                       "pump-window"
                     )
                   }
                 >
-                  View Schedule →
+
+                  💧 View Pump Schedule
+
+                </button>
+
+
+                <button
+                  className="secondary-button"
+                  onClick={
+                    updateRecommendation
+                  }
+                  disabled={updating}
+                >
+
+                  ↻ Recalculate
+
                 </button>
 
               </div>
@@ -1933,14 +2381,18 @@ function App() {
               </div>
 
               <div className="water-number">
+
                 {number(
                   waterRequired,
                   2
                 )}
+
               </div>
 
               <div className="water-label">
+
                 Litres required today
+
               </div>
 
             </div>
@@ -1955,6 +2407,8 @@ function App() {
           <section className="cards">
 
 
+            {/* SOIL */}
+
             <div className="card">
 
               <div className="card-icon">
@@ -1966,18 +2420,26 @@ function App() {
               </div>
 
               <div className="card-value">
+
                 {number(
                   telemetry.soil_moisture_pct,
                   0
                 )}%
+
               </div>
 
               <div className="card-source">
-                Current demo reading
+
+                {isRealEsp32
+                  ? "ESP32-S3 live sensor"
+                  : "Waiting for sensor"}
+
               </div>
 
             </div>
 
+
+            {/* TEMPERATURE */}
 
             <div className="card">
 
@@ -1986,57 +2448,69 @@ function App() {
               </div>
 
               <div className="card-title">
-                Soil Temperature
+                Temperature / Humidity
               </div>
 
               <div className="card-value">
+
                 {number(
                   telemetry.soil_temperature_C,
                   1
                 )}°C
+
               </div>
 
               <div className="card-source">
-                Current demo reading
+
+                {number(
+                  telemetry.humidity_pct,
+                  1
+                )}% humidity • DHT22
+
               </div>
 
             </div>
 
+
+            {/* WATER */}
 
             <div className="card">
 
               <div className="card-icon">
-                ☀
+                🚰
               </div>
 
               <div className="card-title">
-                Solar Irradiance
+                Water Tank
               </div>
 
               <div className="card-value">
-                {number(
-                  telemetry.solar_irradiance_W_m2,
-                  0
-                )}
 
-                <span
-                  style={{
-                    fontSize: "12px",
-                    color: "#7d8982",
-                    marginLeft: "5px",
-                  }}
-                >
-                  W/m²
-                </span>
+                {number(
+                  waterLevel,
+                  0
+                )}%
 
               </div>
 
               <div className="card-source">
-                Weather / demo data
+
+                {number(
+                  waterRemaining,
+                  3
+                )} L remaining
+
+                {" • "}
+
+                ADC{" "}
+                {telemetry.water_sensor_adc ?? "--"}
+
               </div>
 
             </div>
 
+
+            {/* RAIN */}
 
             <div className="card">
 
@@ -2049,26 +2523,31 @@ function App() {
               </div>
 
               <div className="card-value">
+
                 {number(
                   telemetry.rain_24_48h_mm,
                   1
                 )} mm
+
               </div>
 
               <div className="card-source">
+
                 {percent(
                   telemetry.rain_probability_24_48h
-                )} probability
+                )}
+
+                {" probability • OpenWeather"}
+
               </div>
 
             </div>
-
 
           </section>
 
 
           {/* ==================================================
-              WEATHER + WATER INSIGHTS
+              WEATHER
           ================================================== */}
 
           <section
@@ -2077,8 +2556,6 @@ function App() {
           >
 
 
-            {/* WEATHER */}
-
             <div className="panel">
 
               <h3>
@@ -2086,7 +2563,9 @@ function App() {
               </h3>
 
               <div className="panel-description">
-                Rainfall-aware scheduling
+
+                Rainfall-aware scheduling from OpenWeather
+
               </div>
 
 
@@ -2100,16 +2579,22 @@ function App() {
                   </div>
 
                   <div className="forecast-value">
+
                     {number(
                       telemetry.rain_0_24h_mm,
                       1
                     )} mm
+
                   </div>
 
                   <div className="forecast-probability">
+
                     {percent(
                       telemetry.rain_probability_0_24h
-                    )} probability
+                    )}
+
+                    {" probability"}
+
                   </div>
 
                 </div>
@@ -2122,20 +2607,25 @@ function App() {
                   </div>
 
                   <div className="forecast-value">
+
                     {number(
                       telemetry.rain_24_48h_mm,
                       1
                     )} mm
+
                   </div>
 
                   <div className="forecast-probability">
+
                     {percent(
                       telemetry.rain_probability_24_48h
-                    )} probability
+                    )}
+
+                    {" probability"}
+
                   </div>
 
                 </div>
-
 
               </div>
 
@@ -2148,10 +2638,34 @@ function App() {
 
               </div>
 
+
+              <div
+                style={{
+                  marginTop: "18px",
+                  color: "#718078",
+                  fontSize: "12px",
+                }}
+              >
+
+                Solar irradiance:{" "}
+
+                <strong>
+
+                  {number(
+                    telemetry.solar_irradiance_W_m2,
+                    0
+                  )}
+
+                  {" W/m²"}
+
+                </strong>
+
+              </div>
+
             </div>
 
 
-            {/* WATER INSIGHTS */}
+            {/* INSIGHTS */}
 
             <div className="panel">
 
@@ -2160,7 +2674,10 @@ function App() {
               </h3>
 
               <div className="panel-description">
-                Calculated from your farm settings
+
+                Calculated from your current
+                farm settings
+
               </div>
 
 
@@ -2174,10 +2691,12 @@ function App() {
                   </div>
 
                   <div className="insight-value">
+
                     {number(
                       waterRequired,
                       0
                     )} L
+
                   </div>
 
                 </div>
@@ -2190,10 +2709,12 @@ function App() {
                   </div>
 
                   <div className="insight-value">
+
                     {number(
                       pumpRuntime,
                       2
                     )} min
+
                   </div>
 
                 </div>
@@ -2206,10 +2727,12 @@ function App() {
                   </div>
 
                   <div className="insight-value">
+
                     {number(
                       pumpFlow,
                       1
                     )} L/min
+
                   </div>
 
                 </div>
@@ -2222,18 +2745,112 @@ function App() {
                   </div>
 
                   <div className="insight-value">
+
                     {number(
                       Number(
-                        telemetry.application_efficiency
+                        farm.application_efficiency
                       ) * 100,
                       0
                     )}%
+
                   </div>
 
                 </div>
 
+              </div>
+
+            </div>
+
+          </section>
+
+
+          {/* ==================================================
+              WATER TANK
+          ================================================== */}
+
+          <section
+            id="water"
+            className="panel tank-panel"
+          >
+
+            <div className="tank-head">
+
+              <div>
+
+                <div className="eyebrow">
+                  Water Storage
+                </div>
+
+                <h3>
+                  Tank Level
+                </h3>
+
+                <div className="panel-description">
+
+                  Measured by the resistive
+                  water-level sensor connected
+                  to GPIO 3.
+
+                </div>
 
               </div>
+
+
+              <span
+                className={
+                  `tank-status ${
+                    waterStatusClass
+                  }`
+                }
+              >
+
+                {waterStatus}
+
+              </span>
+
+            </div>
+
+
+            <div className="tank-bar">
+
+              <div
+                className="tank-fill"
+                style={{
+                  width:
+                    `${Math.max(
+                      0,
+                      Math.min(
+                        100,
+                        waterLevel
+                      )
+                    )}%`,
+                }}
+              />
+
+            </div>
+
+
+            <div className="tank-meta">
+
+              <span>
+                {number(
+                  waterLevel,
+                  1
+                )}% full
+              </span>
+
+              <span>
+                {number(
+                  waterRemaining,
+                  3
+                )} L remaining
+              </span>
+
+              <span>
+                ADC:{" "}
+                {telemetry.water_sensor_adc ??
+                  "--"}
+              </span>
 
             </div>
 
@@ -2269,7 +2886,7 @@ function App() {
                 <div className="pump-time">
 
                   {schedule?.recommended_start ||
-                    telemetry.start_time ||
+                    farm.start_time ||
                     "06:00"}
 
                   {" – "}
@@ -2285,21 +2902,23 @@ function App() {
                   {number(
                     pumpRuntime,
                     2
-                  )} minutes
+                  )}
 
-                  {" • "}
+                  {" minutes • "}
 
                   {number(
                     pumpFlow,
                     1
-                  )} L/min
+                  )}
 
-                  {" • "}
+                  {" L/min • "}
 
                   {number(
                     waterRequired,
                     2
-                  )} L
+                  )}
+
+                  {" L"}
 
                 </div>
 
@@ -2314,7 +2933,8 @@ function App() {
                 }
                 onClick={() =>
                   setManualMode(
-                    !manualMode
+                    (value) =>
+                      !value
                   )
                 }
               >
@@ -2356,7 +2976,9 @@ function App() {
               <div className="health-dot"></div>
 
               <strong>
-                {needLevel} irrigation requirement
+                {needLevel}
+                {" "}
+                irrigation requirement
               </strong>
 
             </div>
@@ -2365,8 +2987,10 @@ function App() {
             <div className="health-message">
 
               Your{" "}
-              {telemetry.crop_type} crop is{" "}
-              {telemetry.crop_age_days} days old.
+              {farm.crop_type}
+              {" "}crop is{" "}
+              {farm.crop_age_days}
+              {" "}days old.
 
               {" "}Current soil moisture is{" "}
               {number(
@@ -2374,9 +2998,11 @@ function App() {
                 0
               )}%.
 
-              {" "}Agromind combines crop,
-              soil and weather information to
-              calculate the irrigation requirement.
+              {" "}Agromind combines crop
+              configuration, live soil data
+              and weather information to
+              calculate the irrigation
+              requirement.
 
             </div>
 
@@ -2391,7 +3017,7 @@ function App() {
                 </span>
 
                 <strong>
-                  {telemetry.crop_type}
+                  {farm.crop_type}
                 </strong>
 
               </div>
@@ -2404,8 +3030,10 @@ function App() {
                 </span>
 
                 <strong>
-                  {telemetry.crop_age_days}
+
+                  {farm.crop_age_days}
                   {" "}days
+
                 </strong>
 
               </div>
@@ -2418,10 +3046,12 @@ function App() {
                 </span>
 
                 <strong>
+
                   {number(
-                    telemetry.land_size_m2,
+                    farm.land_size_m2,
                     0
                   )} m²
+
                 </strong>
 
               </div>
@@ -2430,23 +3060,21 @@ function App() {
               <div className="health-item">
 
                 <span>
-                  Pump Flow
+                  Soil ADC
                 </span>
 
                 <strong>
-                  {number(
-                    pumpFlow,
-                    1
-                  )} L/min
+
+                  {telemetry.soil_adc ??
+                    "--"}
+
                 </strong>
 
               </div>
 
-
             </div>
 
           </section>
-
 
         </main>
 
@@ -2461,7 +3089,11 @@ function App() {
 createRoot(
   document.getElementById("root")
 ).render(
+
   <React.StrictMode>
+
     <App />
+
   </React.StrictMode>
+
 );
