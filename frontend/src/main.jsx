@@ -20,8 +20,31 @@
       </div>
 
       <section className="schedulebar">
-        <div><span className="eyebrow">TODAY'S PUMP WINDOW</span><strong>{s.recommended_start||"06:00"} — {s.recommended_end||"—"}</strong><small>{s.water_required_L??0} L · {s.pump_runtime_min??0} minutes · {s.pump_flow_L_min??0} L/min</small></div>
-        <button onClick={()=>setManual(true)}><Power size={17}/> Manual Override</button>
+        <section className="schedulebar">
+
+  <div>
+    <span className="eyebrow">
+      TODAY'S PUMP WINDOW
+    </span>
+
+    <strong>
+      {s.recommended_start || "06:00"} –{" "}
+      {s.recommended_end || "--"}
+    </strong>
+
+    <small>
+      {s.water_required_L ?? 0} L ·{" "}
+      {s.pump_runtime_min ?? 0} minutes ·{" "}
+      {s.pump_flow_L_min ?? 0} L/min
+    </small>
+  </div>
+
+  <button onClick={() => setManual(true)}>
+    <Power size={17} />
+    Manual Override
+  </button>
+
+</section>
       </section>
 
       {manual && <div className="modal"><div className="modalbox"><h2>Manual irrigation</h2><p>Send a manual irrigation command to the pump controller.</p><div className="warning">Hardware control is not connected in this web-only deployment.</div><button onClick={()=>setManual(false)}>Close</button></div></div>}
