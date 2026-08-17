@@ -18,6 +18,39 @@ CORS(app)
 
 
 # ============================================================
+# PROJECT CONFIGURATION
+# ============================================================
+
+MODEL_VERSION = "AOSIS-v14"
+
+
+# ============================================================
+# KNUST / KUMASI FARM LOCATION
+# ============================================================
+
+FARM_CONFIG = {
+
+    # KNUST, Kumasi
+    "latitude": 6.6747,
+    "longitude": -1.5717,
+
+    # Farm configuration
+    "crop_type": "Tomato",
+    "crop_age_days": 60,
+    "land_size_m2": 100.0,
+
+    # Pump
+    "pump_flow_L_min": 10.0,
+
+    # Irrigation efficiency
+    "application_efficiency": 0.75,
+
+    # Preferred irrigation start
+    "start_time": "06:00"
+}
+
+
+# ============================================================
 # LATEST ESP32 TELEMETRY
 # ============================================================
 
@@ -38,6 +71,44 @@ LATEST_TELEMETRY = {
     "water_remaining_L": None,
 
     "water_status": "UNKNOWN",
+
+    "last_update": None
+}
+
+
+# ============================================================
+# LATEST WEATHER
+# ============================================================
+
+LATEST_WEATHER = {
+
+    "available": False,
+
+    "latitude":
+        FARM_CONFIG["latitude"],
+
+    "longitude":
+        FARM_CONFIG["longitude"],
+
+    "current_temperature_C": None,
+
+    "current_humidity_pct": None,
+
+    "current_rain_mm": 0.0,
+
+    "solar_irradiance_W_m2": 0.0,
+
+    "rain_0_24h_mm": 0.0,
+
+    "rain_probability_0_24h": 0.0,
+
+    "rain_24_48h_mm": 0.0,
+
+    "rain_probability_24_48h": 0.0,
+
+    "weather": "",
+
+    "weather_description": "",
 
     "last_update": None
 }
@@ -69,62 +140,14 @@ IRRIGATION_COMMAND = {
 
     "recommended_end": None,
 
-    "model_version": "AOSIS-v14",
+    "model_version": MODEL_VERSION,
 
     "last_decision": None
 }
 
 
 # ============================================================
-# FARM CONFIGURATION
-# ============================================================
-
-FARM_CONFIG = {
-
-    "crop_type": "Tomato",
-
-    "crop_age_days": 60,
-
-    "land_size_m2": 100.0,
-
-    "pump_flow_L_min": 10.0,
-
-    "application_efficiency": 0.75,
-
-    "start_time": "06:00"
-}
-
-
-# ============================================================
-# WEATHER / SOLAR CONFIGURATION
-# ============================================================
-#
-# Rainfall is currently supplied by the weather configuration.
-#
-# The /api/weather endpoint below uses the OpenWeather service
-# implemented in services/weather.py.
-#
-# These values are retained as fallback/demo values for the
-# scheduler until live weather values are connected directly
-# to this telemetry cycle.
-# ============================================================
-
-CURRENT_WEATHER = {
-
-    "solar_irradiance_W_m2": 620.0,
-
-    "rain_0_24h_mm": 0.0,
-
-    "rain_probability_0_24h": 0.10,
-
-    "rain_24_48h_mm": 8.0,
-
-    "rain_probability_24_48h": 0.75
-}
-
-
-# ============================================================
-# HELPER — COMMAND ID
+# COMMAND ID GENERATOR
 # ============================================================
 
 def generate_command_id(
@@ -136,18 +159,183 @@ def generate_command_id(
 ):
 
     raw = (
-
         f"{irrigate}|"
         f"{runtime_seconds}|"
         f"{need_level}|"
         f"{irrigation_depth_mm}|"
         f"{water_required_L}"
-
     )
 
     return hashlib.sha256(
         raw.encode()
     ).hexdigest()[:12]
+
+
+# ============================================================
+# FAIL-SAFE COMMAND
+# ============================================================
+
+def set_failsafe_command(
+    reason="FAILSAFE"
+):
+
+    global IRRIGATION_COMMAND
+
+    IRRIGATION_COMMAND = {
+
+        "command_id":
+            reason,
+
+        "irrigate":
+            False,
+
+        "runtime_seconds":
+            0,
+
+        "runtime_minutes":
+            0,
+
+        "need_level":
+            "UNKNOWN",
+
+        "recommendation":
+            reason,
+
+        "water_required_L":
+            0,
+
+        "irrigation_depth_mm":
+            0,
+
+        "recommended_start":
+            None,
+
+        "recommended_end":
+            None,
+
+        "model_version":
+            MODEL_VERSION,
+
+        "last_decision":
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+    }
+
+
+# ============================================================
+# GET LIVE OPENWEATHER DATA
+# ============================================================
+
+def update_weather():
+
+    global LATEST_WEATHER
+
+    try:
+
+        weather = get_weather(
+
+            FARM_CONFIG["latitude"],
+
+            FARM_CONFIG["longitude"]
+
+        )
+
+        LATEST_WEATHER = {
+
+            "available":
+                True,
+
+            "latitude":
+                weather.get(
+                    "latitude",
+                    FARM_CONFIG["latitude"]
+                ),
+
+            "longitude":
+                weather.get(
+                    "longitude",
+                    FARM_CONFIG["longitude"]
+                ),
+
+            "current_temperature_C":
+                weather.get(
+                    "current_temperature_C"
+                ),
+
+            "current_humidity_pct":
+                weather.get(
+                    "current_humidity_pct"
+                ),
+
+            "current_rain_mm":
+                weather.get(
+                    "current_rain_mm",
+                    0
+                ),
+
+            "solar_irradiance_W_m2":
+                weather.get(
+                    "solar_irradiance_W_m2",
+                    0
+                ),
+
+            "rain_0_24h_mm":
+                weather.get(
+                    "rain_0_24h_mm",
+                    0
+                ),
+
+            "rain_probability_0_24h":
+                weather.get(
+                    "rain_probability_0_24h",
+                    0
+                ),
+
+            "rain_24_48h_mm":
+                weather.get(
+                    "rain_24_48h_mm",
+                    0
+                ),
+
+            "rain_probability_24_48h":
+                weather.get(
+                    "rain_probability_24_48h",
+                    0
+                ),
+
+            "weather":
+                weather.get(
+                    "weather",
+                    ""
+                ),
+
+            "weather_description":
+                weather.get(
+                    "weather_description",
+                    ""
+                ),
+
+            "last_update":
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+        }
+
+        return True
+
+    except Exception as exc:
+
+        print(
+            "[WEATHER] Error:",
+            str(exc)
+        )
+
+        LATEST_WEATHER[
+            "available"
+        ] = False
+
+        return False
 
 
 # ============================================================
@@ -166,10 +354,13 @@ def root():
             "AI-Optimized Solar Irrigation Scheduler",
 
         "version":
-            "AOSIS-v14",
+            MODEL_VERSION,
 
         "status":
             "online",
+
+        "location":
+            "KNUST, Kumasi, Ghana",
 
         "esp32_connected":
             LATEST_TELEMETRY[
@@ -178,7 +369,6 @@ def root():
 
         "irrigation_command":
             IRRIGATION_COMMAND
-
     })
 
 
@@ -195,23 +385,27 @@ def health():
             "healthy",
 
         "version":
-            "AOSIS-v14",
+            MODEL_VERSION,
 
         "esp32_connected":
             LATEST_TELEMETRY[
                 "connected"
             ],
 
+        "weather_available":
+            LATEST_WEATHER[
+                "available"
+            ],
+
         "pump_command":
             IRRIGATION_COMMAND[
                 "irrigate"
             ]
-
     })
 
 
 # ============================================================
-# AI IRRIGATION SCHEDULE
+# MANUAL SCHEDULE API
 # ============================================================
 
 @app.post("/api/schedule")
@@ -249,7 +443,6 @@ def schedule():
         key
         for key in required
         if key not in data
-
     ]
 
     if missing:
@@ -285,7 +478,7 @@ def schedule():
 
 
 # ============================================================
-# WEATHER
+# WEATHER API
 # ============================================================
 
 @app.get("/api/weather")
@@ -301,14 +494,15 @@ def weather():
         type=float
     )
 
-    if lat is None or lon is None:
+    # --------------------------------------------------------
+    # If coordinates are not supplied, use KNUST.
+    # --------------------------------------------------------
 
-        return jsonify({
+    if lat is None:
+        lat = FARM_CONFIG["latitude"]
 
-            "error":
-                "lat and lon are required"
-
-        }), 400
+    if lon is None:
+        lon = FARM_CONFIG["longitude"]
 
     try:
 
@@ -332,7 +526,7 @@ def weather():
 
 
 # ============================================================
-# ESP32 TELEMETRY + AI IRRIGATION CONTROL
+# ESP32 TELEMETRY
 # ============================================================
 
 @app.post("/api/telemetry")
@@ -341,8 +535,9 @@ def telemetry():
     global LATEST_TELEMETRY
     global IRRIGATION_COMMAND
 
+
     # ========================================================
-    # RECEIVE JSON
+    # RECEIVE ESP32 JSON
     # ========================================================
 
     data = request.get_json(
@@ -350,6 +545,10 @@ def telemetry():
     ) or {}
 
     if not data:
+
+        set_failsafe_command(
+            "EMPTY_TELEMETRY"
+        )
 
         return jsonify({
 
@@ -365,17 +564,14 @@ def telemetry():
             "runtime_seconds":
                 0,
 
-            "need_level":
-                "UNKNOWN",
-
             "command_id":
-                "FAILSAFE"
+                "EMPTY_TELEMETRY"
 
         }), 400
 
 
     # ========================================================
-    # SAVE ESP32 TELEMETRY
+    # SAVE TELEMETRY
     # ========================================================
 
     LATEST_TELEMETRY = {
@@ -435,7 +631,7 @@ def telemetry():
 
 
     # ========================================================
-    # WATER TANK STATUS
+    # WATER LEVEL STATUS
     # ========================================================
 
     water_level = data.get(
@@ -482,63 +678,23 @@ def telemetry():
     # REQUIRED SENSOR VALIDATION
     # ========================================================
 
-    required_sensor_values = [
+    if (
 
-        "soil_moisture_pct",
+        data.get(
+            "soil_moisture_pct"
+        ) is None
 
-        "soil_temperature_C"
-    ]
+        or
 
-    missing_sensor_values = [
+        data.get(
+            "soil_temperature_C"
+        ) is None
 
-        key
-        for key in required_sensor_values
-        if data.get(key) is None
+    ):
 
-    ]
-
-    if missing_sensor_values:
-
-        IRRIGATION_COMMAND = {
-
-            "command_id":
-                "FAILSAFE",
-
-            "irrigate":
-                False,
-
-            "runtime_seconds":
-                0,
-
-            "runtime_minutes":
-                0,
-
-            "need_level":
-                "UNKNOWN",
-
-            "recommendation":
-                "INVALID SENSOR DATA",
-
-            "water_required_L":
-                0,
-
-            "irrigation_depth_mm":
-                0,
-
-            "recommended_start":
-                None,
-
-            "recommended_end":
-                None,
-
-            "model_version":
-                "AOSIS-v14",
-
-            "last_decision":
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
-        }
+        set_failsafe_command(
+            "INVALID_SENSOR_DATA"
+        )
 
         return jsonify({
 
@@ -546,7 +702,7 @@ def telemetry():
                 "received",
 
             "message":
-                "Telemetry received but required sensor data is missing",
+                "Required sensor data is missing",
 
             "irrigate":
                 False,
@@ -554,20 +710,59 @@ def telemetry():
             "runtime_seconds":
                 0,
 
-            "need_level":
-                "UNKNOWN",
-
             "command_id":
-                "FAILSAFE",
+                "INVALID_SENSOR_DATA",
 
             "data":
                 LATEST_TELEMETRY
 
-        }), 200
+        })
 
 
     # ========================================================
-    # AI SCHEDULER
+    # GET LIVE WEATHER
+    # ========================================================
+
+    weather_success = update_weather()
+
+
+    if not weather_success:
+
+        # ----------------------------------------------------
+        # SAFETY:
+        # Do not make an automatic irrigation decision if
+        # the weather service is unavailable.
+        # ----------------------------------------------------
+
+        set_failsafe_command(
+            "WEATHER_FAILSAFE"
+        )
+
+        return jsonify({
+
+            "status":
+                "received",
+
+            "message":
+                "Weather data unavailable; irrigation disabled",
+
+            "irrigate":
+                False,
+
+            "runtime_seconds":
+                0,
+
+            "command_id":
+                "WEATHER_FAILSAFE",
+
+            "data":
+                LATEST_TELEMETRY
+
+        })
+
+
+    # ========================================================
+    # BUILD AI INPUT
     # ========================================================
 
     try:
@@ -590,35 +785,35 @@ def telemetry():
 
             solar_irradiance_W_m2=
                 float(
-                    CURRENT_WEATHER[
+                    LATEST_WEATHER[
                         "solar_irradiance_W_m2"
                     ]
                 ),
 
             rain_0_24h_mm=
                 float(
-                    CURRENT_WEATHER[
+                    LATEST_WEATHER[
                         "rain_0_24h_mm"
                     ]
                 ),
 
             rain_probability_0_24h=
                 float(
-                    CURRENT_WEATHER[
+                    LATEST_WEATHER[
                         "rain_probability_0_24h"
                     ]
                 ),
 
             rain_24_48h_mm=
                 float(
-                    CURRENT_WEATHER[
+                    LATEST_WEATHER[
                         "rain_24_48h_mm"
                     ]
                 ),
 
             rain_probability_24_48h=
                 float(
-                    CURRENT_WEATHER[
+                    LATEST_WEATHER[
                         "rain_probability_24_48h"
                     ]
                 ),
@@ -656,50 +851,14 @@ def telemetry():
 
     except Exception as exc:
 
-        # ----------------------------------------------------
-        # AI FAILURE = PUMP OFF
-        # ----------------------------------------------------
+        print(
+            "[AI] Scheduler error:",
+            str(exc)
+        )
 
-        IRRIGATION_COMMAND = {
-
-            "command_id":
-                "AI-FAILSAFE",
-
-            "irrigate":
-                False,
-
-            "runtime_seconds":
-                0,
-
-            "runtime_minutes":
-                0,
-
-            "need_level":
-                "UNKNOWN",
-
-            "recommendation":
-                "AI SCHEDULER ERROR",
-
-            "water_required_L":
-                0,
-
-            "irrigation_depth_mm":
-                0,
-
-            "recommended_start":
-                None,
-
-            "recommended_end":
-                None,
-
-            "model_version":
-                "AOSIS-v14",
-
-            "last_decision":
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
-        }
+        set_failsafe_command(
+            "AI_FAILSAFE"
+        )
 
         return jsonify({
 
@@ -707,7 +866,7 @@ def telemetry():
                 "received",
 
             "message":
-                "Telemetry received but AI scheduling failed",
+                "AI scheduler failed",
 
             "irrigate":
                 False,
@@ -715,11 +874,8 @@ def telemetry():
             "runtime_seconds":
                 0,
 
-            "need_level":
-                "UNKNOWN",
-
             "command_id":
-                "AI-FAILSAFE",
+                "AI_FAILSAFE",
 
             "error":
                 str(exc),
@@ -727,40 +883,38 @@ def telemetry():
             "data":
                 LATEST_TELEMETRY
 
-        }), 200
+        })
 
 
     # ========================================================
-    # EXTRACT AI RESULT
+    # EXTRACT AI OUTPUT
     # ========================================================
-
-    pump_runtime_minutes = float(
-
-        schedule_result.get(
-            "pump_runtime_min",
-            0
-        )
-
-    )
-
-    pump_runtime_minutes = max(
-        0,
-        pump_runtime_minutes
-    )
-
-
-    irrigation_depth = float(
-
-        schedule_result.get(
-            "irrigation_depth_mm",
-            0
-        )
-
-    )
 
     irrigation_depth = max(
-        0,
-        irrigation_depth
+
+        0.0,
+
+        float(
+            schedule_result.get(
+                "irrigation_depth_mm",
+                0
+            )
+        )
+
+    )
+
+
+    pump_runtime_minutes = max(
+
+        0.0,
+
+        float(
+            schedule_result.get(
+                "pump_runtime_min",
+                0
+            )
+        )
+
     )
 
 
@@ -783,33 +937,35 @@ def telemetry():
     )
 
 
-    water_required = float(
+    water_required = max(
 
-        schedule_result.get(
-            "water_required_L",
-            0
+        0.0,
+
+        float(
+            schedule_result.get(
+                "water_required_L",
+                0
+            )
         )
 
     )
 
 
     # ========================================================
-    # AI CONTROL DECISION
+    # AUTOMATIC IRRIGATION RULE
     # ========================================================
     #
     # IMPORTANT:
     #
-    # The ESP32 pump is authorized ONLY when the AI
-    # scheduler classifies the irrigation requirement as HIGH.
+    # The physical pump is only authorized when:
     #
-    # LOW    -> Pump OFF
-    # MEDIUM -> Pump OFF
-    # HIGH   -> Pump ON if runtime > 0
+    # 1. AI says HIGH
+    # 2. Irrigation depth > 0
+    # 3. Runtime > 0
+    # 4. Tank has sufficient water
     #
-    # This keeps the AI model responsible for the irrigation
-    # decision rather than making the ESP32 independently
-    # determine irrigation need.
-    # ========================================================
+    # MEDIUM and LOW remain OFF.
+    #
 
     irrigate = (
 
@@ -823,11 +979,7 @@ def telemetry():
 
 
     # ========================================================
-    # CRITICAL WATER LEVEL SAFETY
-    # ========================================================
-    #
-    # Even if the AI says HIGH, the pump must NOT operate
-    # when the tank is critically low.
+    # WATER LEVEL SAFETY
     # ========================================================
 
     try:
@@ -844,30 +996,18 @@ def telemetry():
 
                 pump_runtime_minutes = 0
 
-                recommendation = (
-                    "IRRIGATION CANCELLED - "
-                    "CRITICAL WATER LEVEL"
-                )
-
     except (
         ValueError,
         TypeError
     ):
 
-        # Invalid tank reading = safe state
-
         irrigate = False
 
         pump_runtime_minutes = 0
 
-        recommendation = (
-            "IRRIGATION CANCELLED - "
-            "INVALID WATER LEVEL"
-        )
-
 
     # ========================================================
-    # RUNTIME CONVERSION
+    # RUNTIME
     # ========================================================
 
     runtime_seconds = int(
@@ -910,7 +1050,7 @@ def telemetry():
 
 
     # ========================================================
-    # SAVE IRRIGATION COMMAND
+    # SAVE COMMAND
     # ========================================================
 
     IRRIGATION_COMMAND = {
@@ -963,7 +1103,7 @@ def telemetry():
         "model_version":
             schedule_result.get(
                 "model_version",
-                "AOSIS-v14"
+                MODEL_VERSION
             ),
 
         "last_decision":
@@ -974,7 +1114,7 @@ def telemetry():
 
 
     # ========================================================
-    # SEND AI COMMAND BACK TO ESP32
+    # RETURN COMMAND TO ESP32
     # ========================================================
 
     return jsonify({
@@ -983,7 +1123,7 @@ def telemetry():
             "received",
 
         "message":
-            "Telemetry received and AI irrigation decision generated",
+            "Telemetry received and irrigation decision generated",
 
         "server_time":
             datetime.now(
@@ -1015,7 +1155,7 @@ def telemetry():
             ],
 
         # ----------------------------------------------------
-        # AI INFORMATION
+        # AI RESULT
         # ----------------------------------------------------
 
         "need_level":
@@ -1054,17 +1194,23 @@ def telemetry():
             ],
 
         # ----------------------------------------------------
-        # TELEMETRY
+        # WEATHER
+        # ----------------------------------------------------
+
+        "weather":
+            LATEST_WEATHER,
+
+        # ----------------------------------------------------
+        # ESP32 TELEMETRY
         # ----------------------------------------------------
 
         "data":
             LATEST_TELEMETRY
-
     })
 
 
 # ============================================================
-# GET CURRENT ESP32 TELEMETRY
+# GET CURRENT TELEMETRY
 # ============================================================
 
 @app.get("/api/telemetry")
@@ -1095,7 +1241,7 @@ def get_control():
 def dashboard():
 
     # ========================================================
-    # REAL ESP32 DATA
+    # TELEMETRY
     # ========================================================
 
     if LATEST_TELEMETRY["connected"]:
@@ -1134,140 +1280,104 @@ def dashboard():
 
     else:
 
-        # ----------------------------------------------------
-        # DEMO VALUES
-        # ----------------------------------------------------
-
         soil_moisture = 42.0
-
         soil_temperature = 28.7
-
         humidity = 70.0
-
         water_level = 100.0
-
         water_remaining = 0.5
 
         telemetry_source = "DEMO"
 
 
     # ========================================================
-    # FARM CONFIGURATION
+    # UPDATE WEATHER
     # ========================================================
 
-    crop_type = FARM_CONFIG[
-        "crop_type"
-    ]
-
-    crop_age_days = FARM_CONFIG[
-        "crop_age_days"
-    ]
-
-    land_size_m2 = FARM_CONFIG[
-        "land_size_m2"
-    ]
+    update_weather()
 
 
     # ========================================================
-    # WEATHER
-    # ========================================================
-
-    solar_irradiance = CURRENT_WEATHER[
-        "solar_irradiance_W_m2"
-    ]
-
-    rain_0_24 = CURRENT_WEATHER[
-        "rain_0_24h_mm"
-    ]
-
-    rain_probability_0_24 = CURRENT_WEATHER[
-        "rain_probability_0_24h"
-    ]
-
-    rain_24_48 = CURRENT_WEATHER[
-        "rain_24_48h_mm"
-    ]
-
-    rain_probability_24_48 = CURRENT_WEATHER[
-        "rain_probability_24_48h"
-    ]
-
-
-    # ========================================================
-    # AI SCHEDULER INPUT
-    # ========================================================
-
-    payload = {
-
-        "soil_moisture_pct":
-            float(
-                soil_moisture
-            ),
-
-        "soil_temperature_C":
-            float(
-                soil_temperature
-            ),
-
-        "solar_irradiance_W_m2":
-            float(
-                solar_irradiance
-            ),
-
-        "rain_0_24h_mm":
-            float(
-                rain_0_24
-            ),
-
-        "rain_probability_0_24h":
-            float(
-                rain_probability_0_24
-            ),
-
-        "rain_24_48h_mm":
-            float(
-                rain_24_48
-            ),
-
-        "rain_probability_24_48h":
-            float(
-                rain_probability_24_48
-            ),
-
-        "crop_type":
-            crop_type,
-
-        "crop_age_days":
-            crop_age_days,
-
-        "land_size_m2":
-            land_size_m2,
-
-        "pump_flow_L_min":
-            FARM_CONFIG[
-                "pump_flow_L_min"
-            ],
-
-        "application_efficiency":
-            FARM_CONFIG[
-                "application_efficiency"
-            ],
-
-        "start_time":
-            FARM_CONFIG[
-                "start_time"
-            ]
-    }
-
-
-    # ========================================================
-    # CREATE AI SCHEDULE
+    # AI SCHEDULE
     # ========================================================
 
     try:
 
         schedule_result = create_schedule(
-            **payload
+
+            soil_moisture_pct=
+                float(
+                    soil_moisture
+                ),
+
+            soil_temperature_C=
+                float(
+                    soil_temperature
+                ),
+
+            solar_irradiance_W_m2=
+                float(
+                    LATEST_WEATHER[
+                        "solar_irradiance_W_m2"
+                    ]
+                ),
+
+            rain_0_24h_mm=
+                float(
+                    LATEST_WEATHER[
+                        "rain_0_24h_mm"
+                    ]
+                ),
+
+            rain_probability_0_24h=
+                float(
+                    LATEST_WEATHER[
+                        "rain_probability_0_24h"
+                    ]
+                ),
+
+            rain_24_48h_mm=
+                float(
+                    LATEST_WEATHER[
+                        "rain_24_48h_mm"
+                    ]
+                ),
+
+            rain_probability_24_48h=
+                float(
+                    LATEST_WEATHER[
+                        "rain_probability_24_48h"
+                    ]
+                ),
+
+            crop_type=
+                FARM_CONFIG[
+                    "crop_type"
+                ],
+
+            crop_age_days=
+                FARM_CONFIG[
+                    "crop_age_days"
+                ],
+
+            land_size_m2=
+                FARM_CONFIG[
+                    "land_size_m2"
+                ],
+
+            pump_flow_L_min=
+                FARM_CONFIG[
+                    "pump_flow_L_min"
+                ],
+
+            application_efficiency=
+                FARM_CONFIG[
+                    "application_efficiency"
+                ],
+
+            start_time=
+                FARM_CONFIG[
+                    "start_time"
+                ]
         )
 
     except Exception as exc:
@@ -1284,7 +1394,7 @@ def dashboard():
 
 
     # ========================================================
-    # RETURN DASHBOARD DATA
+    # RETURN DASHBOARD
     # ========================================================
 
     return jsonify({
@@ -1296,11 +1406,6 @@ def dashboard():
 
         "telemetry_source":
             telemetry_source,
-
-
-        # ----------------------------------------------------
-        # SENSOR DATA
-        # ----------------------------------------------------
 
         "telemetry": {
 
@@ -1341,62 +1446,45 @@ def dashboard():
                 )
         },
 
-
-        # ----------------------------------------------------
-        # FARM
-        # ----------------------------------------------------
-
         "farm": {
 
+            "location":
+                "KNUST, Kumasi, Ghana",
+
+            "latitude":
+                FARM_CONFIG[
+                    "latitude"
+                ],
+
+            "longitude":
+                FARM_CONFIG[
+                    "longitude"
+                ],
+
             "crop":
-                crop_type,
+                FARM_CONFIG[
+                    "crop_type"
+                ],
 
             "crop_age_days":
-                crop_age_days,
+                FARM_CONFIG[
+                    "crop_age_days"
+                ],
 
             "land_size_m2":
-                land_size_m2
+                FARM_CONFIG[
+                    "land_size_m2"
+                ]
         },
 
-
-        # ----------------------------------------------------
-        # WEATHER
-        # ----------------------------------------------------
-
-        "weather": {
-
-            "rain_next_24h_mm":
-                rain_0_24,
-
-            "rain_probability_next_24h":
-                rain_probability_0_24,
-
-            "rain_next_48h_mm":
-                rain_24_48,
-
-            "rain_probability_next_48h":
-                rain_probability_24_48,
-
-            "solar_irradiance_W_m2":
-                solar_irradiance
-        },
-
-
-        # ----------------------------------------------------
-        # AI SCHEDULE
-        # ----------------------------------------------------
+        "weather":
+            LATEST_WEATHER,
 
         "schedule":
             schedule_result,
 
-
-        # ----------------------------------------------------
-        # CURRENT HARDWARE COMMAND
-        # ----------------------------------------------------
-
         "irrigation_command":
             IRRIGATION_COMMAND
-
     })
 
 
