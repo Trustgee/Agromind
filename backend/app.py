@@ -1,3099 +1,1760 @@
-import React, { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
+import os
+import hashlib
+from datetime import datetime, timezone
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  "https://agromind-api-w832.onrender.com";
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 
-const CROP_OPTIONS = ["Tomato", "Pepper"];
+from services.scheduler import create_schedule
+from services.weather import get_weather
 
-const DEFAULT_FARM = {
-  crop_type: "Tomato",
-  crop_age_days: 60,
-  land_size_m2: 100,
-  pump_flow_L_min: 10,
-  application_efficiency: 0.75,
-  start_time: "06:00",
-};
 
-const DEFAULT_TELEMETRY = {
-  soil_moisture_pct: 0,
-  soil_temperature_C: 0,
-  humidity_pct: 0,
-  soil_adc: null,
-  water_sensor_adc: null,
-  water_level_pct: 0,
-  water_remaining_L: 0,
-  water_status: "UNKNOWN",
-  solar_irradiance_W_m2: 0,
-  rain_0_24h_mm: 0,
-  rain_probability_0_24h: 0,
-  rain_24_48h_mm: 0,
-  rain_probability_24_48h: 0,
-  last_update: null,
-};
+# ============================================================
+# FLASK APP
+# ============================================================
 
-function readFarm() {
-  try {
-    const saved = localStorage.getItem("agromind_farm");
+app = Flask(__name__)
 
-    return saved
-      ? { ...DEFAULT_FARM, ...JSON.parse(saved) }
-      : DEFAULT_FARM;
-  } catch {
-    return DEFAULT_FARM;
-  }
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": "*"
+        }
+    }
+)
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+
+        number = float(value)
+
+        if number != number:
+            return default
+
+        return number
+
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+# ============================================================
+# LATEST ESP32 TELEMETRY
+# ============================================================
+
+LATEST_TELEMETRY = {
+
+    "connected": False,
+
+    "device_id": None,
+
+    "soil_moisture_pct": None,
+    "soil_adc": None,
+
+    "soil_temperature_C": None,
+    "humidity_pct": None,
+
+    "water_sensor_adc": None,
+    "water_level_pct": None,
+    "water_remaining_L": None,
+
+    "water_status": "UNKNOWN",
+
+    "last_update": None
 }
 
-function App() {
-  const [farm, setFarm] = useState(readFarm);
 
-  const [telemetry, setTelemetry] =
-    useState(DEFAULT_TELEMETRY);
+# ============================================================
+# LATEST IRRIGATION COMMAND
+# ============================================================
 
-  const [schedule, setSchedule] =
-    useState(null);
+IRRIGATION_COMMAND = {
 
-  const [telemetrySource, setTelemetrySource] =
-    useState("DEMO");
+    "command_id": "NONE",
 
-  const [loading, setLoading] =
-    useState(true);
+    "irrigate": False,
 
-  const [updating, setUpdating] =
-    useState(false);
+    "runtime_seconds": 0,
 
-  const [error, setError] =
-    useState("");
+    "runtime_minutes": 0,
 
-  const [manualMode, setManualMode] =
-    useState(false);
+    "need_level": "UNKNOWN",
 
-  const [activeSection, setActiveSection] =
-    useState("overview");
+    "recommendation": "NO IRRIGATION",
 
+    "water_required_L": 0,
 
-  // ============================================================
-  // SAVE FARM SETTINGS
-  // ============================================================
+    "irrigation_depth_mm": 0,
 
-  useEffect(() => {
+    "recommended_start": None,
 
-    localStorage.setItem(
-      "agromind_farm",
-      JSON.stringify(farm)
-    );
+    "recommended_end": None,
 
-  }, [farm]);
+    "model_version": "AOSIS-v14",
 
+    "irrigation_status": "WAITING",
 
-  // ============================================================
-  // LOAD DASHBOARD
-  // ============================================================
+    "last_decision": None
+}
 
-  async function loadDashboard(
-    showLoading = true
-  ) {
 
-    try {
+# ============================================================
+# LAST AI SCHEDULE
+# ============================================================
 
-      if (showLoading) {
-        setLoading(true);
-      }
+LAST_SCHEDULE = None
 
-      setError("");
 
-      const response = await fetch(
-        `${API_URL}/api/dashboard`,
-        {
-          cache: "no-store",
-        }
-      );
+# ============================================================
+# FARM CONFIGURATION
+# ============================================================
 
-      if (!response.ok) {
+FARM_CONFIG = {
 
-        throw new Error(
-          `API returned ${response.status}`
-        );
+    "crop_type": "Tomato",
 
-      }
+    "crop_age_days": 60,
 
-      const result =
-        await response.json();
+    "land_size_m2": 100.0,
 
+    "pump_flow_L_min": 10.0,
 
-      setTelemetry({
-        ...DEFAULT_TELEMETRY,
-        ...(result.telemetry || {}),
-      });
+    "application_efficiency": 0.75,
 
+    "start_time": "06:00"
+}
 
-      setTelemetrySource(
-        result.telemetry_source || "DEMO"
-      );
 
+# ============================================================
+# WEATHER CONFIGURATION
+#
+# Weather is supplied by the weather service / OpenWeather
+# integration.
+#
+# There is NO rain sensor being used here.
+# ============================================================
 
-      setSchedule(
-        result.schedule || null
-      );
+CURRENT_WEATHER = {
 
+    "solar_irradiance_W_m2": 620.0,
 
-    } catch (err) {
+    "rain_0_24h_mm": 0.0,
 
-      console.error(err);
+    "rain_probability_0_24h": 0.10,
 
-      setError(
-        "Unable to connect to the Agromind API."
-      );
+    "rain_24_48h_mm": 8.0,
 
+    "rain_probability_24_48h": 0.75
+}
 
-    } finally {
 
-      if (showLoading) {
-        setLoading(false);
-      }
+# ============================================================
+# COMMAND ID
+# ============================================================
 
-    }
+def generate_command_id(
+    irrigate,
+    runtime_seconds,
+    need_level,
+    irrigation_depth_mm,
+    water_required_L
+):
 
-  }
-
-
-  // ============================================================
-  // START DASHBOARD + AUTO REFRESH
-  // ============================================================
-
-  useEffect(() => {
-
-    loadDashboard(true);
-
-    const interval =
-      setInterval(() => {
-
-        loadDashboard(false);
-
-      }, 5000);
-
-
-    return () =>
-      clearInterval(interval);
-
-  }, []);
-
-
-  // ============================================================
-  // UPDATE FARM VALUE
-  // ============================================================
-
-  function updateFarm(
-    key,
-    value
-  ) {
-
-    setFarm((previous) => ({
-
-      ...previous,
-
-      [key]: value,
-
-    }));
-
-  }
-
-
-  // ============================================================
-  // UPDATE AI RECOMMENDATION
-  // ============================================================
-
-  async function updateRecommendation() {
-
-    try {
-
-      setUpdating(true);
-
-      setError("");
-
-
-      const payload = {
-
-        soil_moisture_pct:
-          Number(
-            telemetry.soil_moisture_pct
-          ),
-
-        soil_temperature_C:
-          Number(
-            telemetry.soil_temperature_C
-          ),
-
-        solar_irradiance_W_m2:
-          Number(
-            telemetry.solar_irradiance_W_m2
-          ),
-
-        rain_0_24h_mm:
-          Number(
-            telemetry.rain_0_24h_mm
-          ),
-
-        rain_probability_0_24h:
-          Number(
-            telemetry.rain_probability_0_24h
-          ),
-
-        rain_24_48h_mm:
-          Number(
-            telemetry.rain_24_48h_mm
-          ),
-
-        rain_probability_24_48h:
-          Number(
-            telemetry.rain_probability_24_48h
-          ),
-
-        crop_type:
-          farm.crop_type,
-
-        crop_age_days:
-          Number(
-            farm.crop_age_days
-          ),
-
-        land_size_m2:
-          Number(
-            farm.land_size_m2
-          ),
-
-        pump_flow_L_min:
-          Number(
-            farm.pump_flow_L_min
-          ),
-
-        application_efficiency:
-          Number(
-            farm.application_efficiency
-          ),
-
-        start_time:
-          farm.start_time ||
-          "06:00",
-
-      };
-
-
-      const response =
-        await fetch(
-          `${API_URL}/api/schedule`,
-          {
-
-            method: "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-
-            body:
-              JSON.stringify(payload),
-
-          }
-        );
-
-
-      const result =
-        await response.json();
-
-
-      if (!response.ok) {
-
-        throw new Error(
-          result.error ||
-          "Unable to calculate irrigation schedule"
-        );
-
-      }
-
-
-      setSchedule(result);
-
-
-    } catch (err) {
-
-      console.error(err);
-
-      setError(
-        err.message ||
-        "Unable to update recommendation"
-      );
-
-
-    } finally {
-
-      setUpdating(false);
-
-    }
-
-  }
-
-
-  // ============================================================
-  // SIDEBAR NAVIGATION
-  // ============================================================
-
-  function scrollToSection(id) {
-
-    setActiveSection(id);
-
-    document
-      .getElementById(id)
-      ?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-
-  }
-
-
-  // ============================================================
-  // FORMATTERS
-  // ============================================================
-
-  function number(
-    value,
-    decimals = 1
-  ) {
-
-    const n =
-      Number(value);
-
-    if (!Number.isFinite(n)) {
-      return "0";
-    }
-
-    return n.toLocaleString(
-      undefined,
-      {
-        minimumFractionDigits:
-          decimals,
-
-        maximumFractionDigits:
-          decimals,
-      }
-    );
-
-  }
-
-
-  function percent(value) {
-
-    const n =
-      Number(value);
-
-    if (!Number.isFinite(n)) {
-      return "0%";
-    }
-
-    return `${Math.round(n * 100)}%`;
-
-  }
-
-
-  // ============================================================
-  // CALCULATED VALUES
-  // ============================================================
-
-  const irrigationDepth =
-    Number(
-      schedule?.irrigation_depth_mm ?? 0
-    );
-
-
-  const waterRequired =
-    Number(
-      schedule?.water_required_L ?? 0
-    );
-
-
-  const pumpRuntime =
-    Number(
-      schedule?.pump_runtime_min ?? 0
-    );
-
-
-  const pumpFlow =
-    Number(
-      schedule?.pump_flow_L_min ??
-      farm.pump_flow_L_min ??
-      0
-    );
-
-
-  const needLevel =
-    schedule?.need_level ||
-    "MEDIUM";
-
-
-  // ============================================================
-  // ESP32 STATUS
-  // ============================================================
-
-  const isRealEsp32 =
-    String(
-      telemetrySource
+    raw = (
+        f"{irrigate}|"
+        f"{runtime_seconds}|"
+        f"{need_level}|"
+        f"{irrigation_depth_mm}|"
+        f"{water_required_L}"
     )
-      .toUpperCase()
-      .includes("ESP32");
 
+    return hashlib.sha256(
+        raw.encode()
+    ).hexdigest()[:12]
+
+
+# ============================================================
+# BUILD AI PAYLOAD
+# ============================================================
+
+def build_scheduler_payload(
+    soil_moisture_pct,
+    soil_temperature_C
+):
+
+    return {
+
+        "soil_moisture_pct":
+            safe_float(
+                soil_moisture_pct
+            ),
+
+        "soil_temperature_C":
+            safe_float(
+                soil_temperature_C
+            ),
+
+        "solar_irradiance_W_m2":
+            safe_float(
+                CURRENT_WEATHER[
+                    "solar_irradiance_W_m2"
+                ]
+            ),
+
+        "rain_0_24h_mm":
+            safe_float(
+                CURRENT_WEATHER[
+                    "rain_0_24h_mm"
+                ]
+            ),
+
+        "rain_probability_0_24h":
+            safe_float(
+                CURRENT_WEATHER[
+                    "rain_probability_0_24h"
+                ]
+            ),
+
+        "rain_24_48h_mm":
+            safe_float(
+                CURRENT_WEATHER[
+                    "rain_24_48h_mm"
+                ]
+            ),
+
+        "rain_probability_24_48h":
+            safe_float(
+                CURRENT_WEATHER[
+                    "rain_probability_24_48h"
+                ]
+            ),
+
+        "crop_type":
+            FARM_CONFIG[
+                "crop_type"
+            ],
+
+        "crop_age_days":
+            safe_int(
+                FARM_CONFIG[
+                    "crop_age_days"
+                ]
+            ),
+
+        "land_size_m2":
+            safe_float(
+                FARM_CONFIG[
+                    "land_size_m2"
+                ]
+            ),
+
+        "pump_flow_L_min":
+            safe_float(
+                FARM_CONFIG[
+                    "pump_flow_L_min"
+                ]
+            ),
+
+        "application_efficiency":
+            safe_float(
+                FARM_CONFIG[
+                    "application_efficiency"
+                ]
+            ),
+
+        "start_time":
+            FARM_CONFIG[
+                "start_time"
+            ]
+    }
+
 
-  // ============================================================
-  // WATER TANK
-  // ============================================================
+# ============================================================
+# UPDATE IRRIGATION COMMAND
+# ============================================================
 
-  const waterLevel =
-    Number(
-      telemetry.water_level_pct ?? 0
-    );
+def save_irrigation_command(schedule_result):
 
+    global IRRIGATION_COMMAND
 
-  const waterRemaining =
-    Number(
-      telemetry.water_remaining_L ?? 0
-    );
+    pump_runtime_minutes = safe_float(
+        schedule_result.get(
+            "pump_runtime_min",
+            0
+        )
+    )
 
+    pump_runtime_minutes = max(
+        0,
+        pump_runtime_minutes
+    )
 
-  const waterStatus =
-    telemetry.water_status ||
-    (
-      waterLevel <= 10
-        ? "CRITICAL"
-        : waterLevel <= 25
-        ? "LOW"
-        : "NORMAL"
-    );
 
+    irrigation_depth = safe_float(
+        schedule_result.get(
+            "irrigation_depth_mm",
+            0
+        )
+    )
 
-  const waterStatusClass =
-    waterStatus === "CRITICAL"
-      ? "critical"
-      : waterStatus === "LOW"
-      ? "low"
-      : "normal";
+    irrigation_depth = max(
+        0,
+        irrigation_depth
+    )
 
 
-  // ============================================================
-  // UI
-  // ============================================================
+    need_level = str(
+        schedule_result.get(
+            "need_level",
+            "LOW"
+        )
+    ).upper()
 
-  return (
 
-    <>
+    recommendation = schedule_result.get(
+        "recommendation",
+        "NO IRRIGATION"
+    )
 
-      <style>{`
 
-        * {
-          box-sizing: border-box;
-        }
+    water_required = safe_float(
+        schedule_result.get(
+            "water_required_L",
+            0
+        )
+    )
 
-        html {
-          scroll-behavior: smooth;
-        }
+    water_required = max(
+        0,
+        water_required
+    )
 
-        body {
-          margin: 0;
 
-          font-family:
-            Inter,
-            -apple-system,
-            BlinkMacSystemFont,
-            "Segoe UI",
-            sans-serif;
+    # --------------------------------------------------------
+    # INITIAL AI DECISION
+    # --------------------------------------------------------
 
-          background: #f5f7f3;
-          color: #15251c;
-        }
+    irrigate = (
+        irrigation_depth > 0
+        and pump_runtime_minutes > 0
+    )
 
-        button,
-        input,
-        select {
-          font: inherit;
-        }
 
-        button {
-          cursor: pointer;
-        }
+    irrigation_status = (
+        "IRRIGATION APPROVED"
+        if irrigate
+        else "NO IRRIGATION"
+    )
 
 
-        /* ================================================
-           APP
-        ================================================ */
+    # --------------------------------------------------------
+    # TANK SAFETY
+    # --------------------------------------------------------
 
-        .agro-app {
-          min-height: 100vh;
+    water_level = (
+        LATEST_TELEMETRY.get(
+            "water_level_pct"
+        )
+    )
 
-          display: flex;
+    if water_level is not None:
 
-          background: #f5f7f3;
-        }
+        try:
 
+            current_water_level = float(
+                water_level
+            )
 
-        /* ================================================
-           SIDEBAR
-        ================================================ */
+            if current_water_level <= 10:
 
-        .sidebar {
-          width: 250px;
+                irrigate = False
 
-          min-height: 100vh;
+                pump_runtime_minutes = 0
 
-          position: fixed;
+                irrigation_status = (
+                    "BLOCKED — TANK CRITICALLY LOW"
+                )
 
-          left: 0;
-          top: 0;
-          bottom: 0;
+        except (
+            ValueError,
+            TypeError
+        ):
 
-          background: #102117;
+            pass
 
-          color: white;
 
-          padding: 28px 18px;
+    # --------------------------------------------------------
+    # RUNTIME
+    # --------------------------------------------------------
 
-          display: flex;
+    runtime_seconds = int(
+        round(
+            pump_runtime_minutes * 60
+        )
+    )
 
-          flex-direction: column;
 
-          z-index: 20;
-        }
+    if not irrigate:
 
+        runtime_seconds = 0
 
-        .brand {
-          padding:
-            5px 12px 30px;
-        }
 
+    # --------------------------------------------------------
+    # COMMAND ID
+    # --------------------------------------------------------
 
-        .brand-small {
-          font-size: 10px;
+    command_id = generate_command_id(
 
-          color: #b9d95b;
+        irrigate,
 
-          text-transform:
-            uppercase;
+        runtime_seconds,
 
-          letter-spacing: 2px;
+        need_level,
 
-          font-weight: 800;
-        }
+        round(
+            irrigation_depth,
+            3
+        ),
 
+        round(
+            water_required,
+            2
+        )
+    )
 
-        .brand-name {
-          font-size: 26px;
 
-          font-weight: 850;
+    # --------------------------------------------------------
+    # SAVE COMMAND
+    # --------------------------------------------------------
 
-          margin-top: 7px;
-        }
+    IRRIGATION_COMMAND = {
 
+        "command_id":
+            command_id,
 
-        .brand-subtitle {
-          color: #8fa396;
+        "irrigate":
+            bool(
+                irrigate
+            ),
 
-          font-size: 12px;
+        "runtime_seconds":
+            runtime_seconds,
 
-          margin-top: 5px;
-        }
+        "runtime_minutes":
+            round(
+                runtime_seconds / 60,
+                2
+            ),
 
+        "need_level":
+            need_level,
 
-        .nav {
-          display: flex;
+        "recommendation":
+            recommendation,
 
-          flex-direction: column;
+        "water_required_L":
+            round(
+                water_required,
+                2
+            ),
 
-          gap: 7px;
-        }
+        "irrigation_depth_mm":
+            round(
+                irrigation_depth,
+                3
+            ),
 
+        "recommended_start":
+            schedule_result.get(
+                "recommended_start"
+            ),
 
-        .nav-button {
-          border: none;
+        "recommended_end":
+            schedule_result.get(
+                "recommended_end"
+            ),
 
-          background: transparent;
+        "model_version":
+            schedule_result.get(
+                "model_version",
+                "AOSIS-v14"
+            ),
 
-          color: #d8e1db;
+        "irrigation_status":
+            irrigation_status,
 
-          padding: 14px;
+        "last_decision":
+            utc_now()
+    }
 
-          border-radius: 12px;
 
-          text-align: left;
+# ============================================================
+# ROOT
+# ============================================================
 
-          font-weight: 650;
+@app.get("/")
+def root():
 
-          display: flex;
+    return jsonify({
 
-          align-items: center;
+        "project":
+            "Agromind",
 
-          gap: 12px;
+        "system":
+            "AI-Optimized Solar Irrigation Scheduler",
 
-          transition: .2s;
-        }
+        "version":
+            "AOSIS-v14",
 
+        "status":
+            "online",
 
-        .nav-button:hover {
-          background:
-            rgba(255,255,255,.09);
+        "esp32_connected":
+            LATEST_TELEMETRY[
+                "connected"
+            ],
 
-          color: white;
-        }
+        "irrigation_command":
+            IRRIGATION_COMMAND
 
+    })
 
-        .nav-button.active {
-          background:
-            rgba(255,255,255,.09);
 
-          color: white;
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
-          box-shadow:
-            inset 3px 0 #b9ef17;
-        }
+@app.get("/api/health")
+def health():
 
+    return jsonify({
 
-        .nav-icon {
-          width: 24px;
+        "status":
+            "healthy",
 
-          text-align: center;
+        "version":
+            "AOSIS-v14",
 
-          font-size: 17px;
-        }
+        "esp32_connected":
+            LATEST_TELEMETRY[
+                "connected"
+            ],
 
+        "pump_command":
+            IRRIGATION_COMMAND[
+                "irrigate"
+            ]
 
-        .sidebar-bottom {
-          margin-top: auto;
+    })
 
-          padding:
-            15px 12px;
 
-          border-top:
-            1px solid
-            rgba(255,255,255,.1);
-        }
+# ============================================================
+# AI IRRIGATION SCHEDULE
+# ============================================================
 
+@app.post("/api/schedule")
+def schedule():
 
-        .online-dot {
-          width: 8px;
-          height: 8px;
+    global FARM_CONFIG
+    global LAST_SCHEDULE
 
-          display: inline-block;
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-          border-radius: 50%;
 
-          margin-right: 8px;
+    # --------------------------------------------------------
+    # REQUIRED FIELDS
+    # --------------------------------------------------------
 
-          background: #b8ef20;
-        }
+    required = [
 
+        "soil_moisture_pct",
 
-        .online-dot.demo {
-          background: #f0ad27;
-        }
+        "soil_temperature_C",
 
+        "solar_irradiance_W_m2",
 
-        .online-text {
-          color: #b8ef20;
+        "rain_0_24h_mm",
 
-          font-size: 12px;
+        "rain_probability_0_24h",
 
-          font-weight: 800;
-        }
+        "rain_24_48h_mm",
 
+        "rain_probability_24_48h",
 
-        .online-text.demo {
-          color: #f0ad27;
-        }
+        "crop_type",
 
+        "crop_age_days",
 
-        .model-text {
-          color: #8fa396;
+        "land_size_m2"
+    ]
 
-          font-size: 11px;
 
-          margin-top: 9px;
-        }
+    missing = [
 
+        key
+        for key in required
+        if key not in data
+    ]
 
-        /* ================================================
-           MAIN
-        ================================================ */
 
-        .main {
-          margin-left: 250px;
+    if missing:
 
-          width:
-            calc(100% - 250px);
+        return jsonify({
 
-          padding:
-            38px 42px 60px;
-        }
+            "error":
+                "Missing fields",
 
+            "fields":
+                missing
 
-        .topbar {
-          display: flex;
+        }), 400
 
-          align-items: center;
 
-          justify-content:
-            space-between;
+    try:
 
-          margin-bottom: 20px;
+        # ----------------------------------------------------
+        # SAVE FARM SETTINGS
+        #
+        # This is important because the frontend can change
+        # crop, crop age, land size and pump flow.
+        # ----------------------------------------------------
 
-          gap: 20px;
-        }
+        FARM_CONFIG[
+            "crop_type"
+        ] = str(
+            data.get(
+                "crop_type",
+                FARM_CONFIG[
+                    "crop_type"
+                ]
+            )
+        )
 
 
-        .eyebrow {
-          color: #78877e;
+        FARM_CONFIG[
+            "crop_age_days"
+        ] = safe_int(
+            data.get(
+                "crop_age_days",
+                FARM_CONFIG[
+                    "crop_age_days"
+                ]
+            )
+        )
 
-          font-size: 11px;
 
-          text-transform:
-            uppercase;
+        FARM_CONFIG[
+            "land_size_m2"
+        ] = safe_float(
+            data.get(
+                "land_size_m2",
+                FARM_CONFIG[
+                    "land_size_m2"
+                ]
+            )
+        )
 
-          letter-spacing: 1.7px;
 
-          font-weight: 800;
+        FARM_CONFIG[
+            "pump_flow_L_min"
+        ] = safe_float(
+            data.get(
+                "pump_flow_L_min",
+                FARM_CONFIG[
+                    "pump_flow_L_min"
+                ]
+            )
+        )
 
-          margin-bottom: 7px;
-        }
 
+        FARM_CONFIG[
+            "application_efficiency"
+        ] = safe_float(
+            data.get(
+                "application_efficiency",
+                FARM_CONFIG[
+                    "application_efficiency"
+                ]
+            )
+        )
 
-        .page-title {
-          margin: 0;
 
-          font-size: 34px;
+        FARM_CONFIG[
+            "start_time"
+        ] = data.get(
+            "start_time",
+            FARM_CONFIG[
+                "start_time"
+            ]
+        )
 
-          line-height: 1.1;
 
-          letter-spacing: -1px;
-        }
+        # ----------------------------------------------------
+        # CREATE AI SCHEDULE
+        # ----------------------------------------------------
 
+        result = create_schedule(
 
-        .page-subtitle {
-          color: #718078;
-
-          margin:
-            8px 0 0;
-        }
-
-
-        .refresh-button {
-          border:
-            1px solid #d7dfd8;
-
-          background: white;
-
-          border-radius: 12px;
-
-          padding:
-            11px 16px;
-
-          color: #26382d;
-
-          font-weight: 700;
-        }
-
-
-        /* ================================================
-           CONNECTION
-        ================================================ */
-
-        .connection-bar {
-          display: flex;
-
-          align-items: center;
-
-          justify-content:
-            space-between;
-
-          gap: 12px;
-
-          background: white;
-
-          border:
-            1px solid #e2e8e2;
-
-          border-radius: 14px;
-
-          padding:
-            12px 16px;
-
-          margin-bottom: 20px;
-
-          font-size: 12px;
-        }
-
-
-        .connection-left {
-          display: flex;
-
-          align-items: center;
-
-          gap: 9px;
-
-          font-weight: 800;
-        }
-
-
-        .connection-led {
-          width: 9px;
-          height: 9px;
-
-          border-radius: 50%;
-
-          background: #f0ad27;
-        }
-
-
-        .connection-led.live {
-          background: #58c72d;
-
-          box-shadow:
-            0 0 0 4px #e8f6e3;
-        }
-
-
-        .connection-time {
-          color: #8a968f;
-        }
-
-
-        /* ================================================
-           CONFIGURATION
-        ================================================ */
-
-        .configuration {
-          background: white;
-
-          border:
-            1px solid #e2e8e2;
-
-          border-radius: 18px;
-
-          padding: 24px;
-
-          margin-bottom: 22px;
-
-          box-shadow:
-            0 5px 20px
-            rgba(27,55,38,.035);
-        }
-
-
-        .section-title {
-          margin:
-            0 0 6px;
-
-          font-size: 22px;
-        }
-
-
-        .section-description {
-          color: #78857e;
-
-          font-size: 12px;
-
-          margin-bottom: 20px;
-        }
-
-
-        .configuration-grid {
-          display: grid;
-
-          grid-template-columns:
-            repeat(4,1fr);
-
-          gap: 15px;
-
-          align-items: end;
-        }
-
-
-        .field label {
-          display: block;
-
-          color: #637269;
-
-          font-size: 12px;
-
-          font-weight: 750;
-
-          margin-bottom: 7px;
-        }
-
-
-        .field input,
-        .field select {
-          width: 100%;
-
-          height: 45px;
-
-          border:
-            1px solid #d8e0d9;
-
-          border-radius: 10px;
-
-          background: #fbfcfb;
-
-          padding:
-            0 12px;
-
-          color: #1a2c21;
-
-          outline: none;
-        }
-
-
-        .input-unit {
-          position: relative;
-        }
-
-
-        .input-unit input {
-          padding-right: 55px;
-        }
-
-
-        .input-unit span {
-          position: absolute;
-
-          right: 12px;
-
-          top: 50%;
-
-          transform:
-            translateY(-50%);
-
-          color: #829087;
-
-          font-size: 12px;
-
-          font-weight: 700;
-        }
-
-
-        .update-button {
-          height: 45px;
-
-          border: none;
-
-          border-radius: 10px;
-
-          padding:
-            0 18px;
-
-          background: #b9ef17;
-
-          color: #17230e;
-
-          font-weight: 850;
-        }
-
-
-        .update-button:disabled {
-          opacity: .6;
-
-          cursor: wait;
-        }
-
-
-        /* ================================================
-           HERO
-        ================================================ */
-
-        .hero {
-          background:
-            linear-gradient(
-              135deg,
-              #092c1e,
-              #102c20 60%,
-              #063722
-            );
-
-          color: white;
-
-          border-radius: 22px;
-
-          padding: 31px;
-
-          min-height: 210px;
-
-          display: grid;
-
-          grid-template-columns:
-            1fr auto;
-
-          align-items: center;
-
-          gap: 30px;
-
-          box-shadow:
-            0 15px 40px
-            rgba(8,47,29,.15);
-
-          margin-bottom: 22px;
-        }
-
-
-        .hero-label {
-          color: #b8d55c;
-
-          font-size: 11px;
-
-          font-weight: 800;
-
-          letter-spacing: 1.6px;
-
-          text-transform:
-            uppercase;
-        }
-
-
-        .hero-main {
-          display: flex;
-
-          align-items:
-            baseline;
-
-          gap: 10px;
-
-          margin-top: 10px;
-
-          flex-wrap: wrap;
-        }
-
-
-        .need {
-          font-size: 15px;
-
-          color: #d9e5dc;
-
-          font-weight: 700;
-        }
-
-
-        .depth {
-          font-size: 42px;
-
-          font-weight: 850;
-
-          letter-spacing: -1.5px;
-        }
-
-
-        .mm {
-          font-size: 15px;
-
-          color: #b8c9bf;
-        }
-
-
-        .hero-description {
-          color: #aebfb5;
-
-          font-size: 13px;
-
-          margin-top: 9px;
-        }
-
-
-        .hero-actions {
-          display: flex;
-
-          gap: 10px;
-
-          margin-top: 20px;
-
-          flex-wrap: wrap;
-        }
-
-
-        .primary-button {
-          border: none;
-
-          background: #b9ef17;
-
-          color: #14200e;
-
-          border-radius: 10px;
-
-          padding:
-            12px 17px;
-
-          font-weight: 850;
-        }
-
-
-        .secondary-button {
-          border:
-            1px solid
-            rgba(255,255,255,.18);
-
-          background:
-            rgba(255,255,255,.08);
-
-          color: white;
-
-          border-radius: 10px;
-
-          padding:
-            12px 17px;
-
-          font-weight: 750;
-        }
-
-
-        .water-total {
-          min-width: 240px;
-
-          text-align: center;
-
-          padding: 20px;
-
-          border:
-            1px solid
-            rgba(255,255,255,.12);
-
-          border-radius: 18px;
-
-          background:
-            rgba(255,255,255,.04);
-        }
-
-
-        .water-number {
-          font-size: 30px;
-
-          font-weight: 850;
-
-          margin-top: 4px;
-        }
-
-
-        .water-label {
-          color: #aebfb5;
-
-          font-size: 12px;
-        }
-
-
-        /* ================================================
-           SENSOR CARDS
-        ================================================ */
-
-        .cards {
-          display: grid;
-
-          grid-template-columns:
-            repeat(4,1fr);
-
-          gap: 16px;
-
-          margin-bottom: 22px;
-        }
-
-
-        .card {
-          background: white;
-
-          border:
-            1px solid #e2e8e2;
-
-          border-radius: 17px;
-
-          padding: 20px;
-
-          min-height: 145px;
-
-          box-shadow:
-            0 5px 20px
-            rgba(27,55,38,.035);
-        }
-
-
-        .card-icon {
-          width: 35px;
-          height: 35px;
-
-          border-radius: 10px;
-
-          background: #f0f5e9;
-
-          display: flex;
-
-          align-items: center;
-
-          justify-content: center;
-
-          margin-bottom: 16px;
-        }
-
-
-        .card-title {
-          color: #718078;
-
-          font-size: 12px;
-
-          font-weight: 700;
-        }
-
-
-        .card-value {
-          margin-top: 5px;
-
-          font-size: 26px;
-
-          font-weight: 850;
-        }
-
-
-        .card-source {
-          color: #9aa59f;
-
-          font-size: 10px;
-
-          margin-top: 4px;
-        }
-
-
-        /* ================================================
-           PANELS
-        ================================================ */
-
-        .two-column {
-          display: grid;
-
-          grid-template-columns:
-            1.15fr .85fr;
-
-          gap: 18px;
-
-          margin-bottom: 22px;
-        }
-
-
-        .panel {
-          background: white;
-
-          border:
-            1px solid #e2e8e2;
-
-          border-radius: 18px;
-
-          padding: 24px;
-
-          box-shadow:
-            0 5px 20px
-            rgba(27,55,38,.035);
-        }
-
-
-        .panel h3 {
-          margin: 0;
-
-          font-size: 20px;
-        }
-
-
-        .panel-description {
-          color: #85918a;
-
-          font-size: 12px;
-
-          margin-top: 5px;
-        }
-
-
-        /* ================================================
-           WEATHER
-        ================================================ */
-
-        .forecast-row {
-          display: grid;
-
-          grid-template-columns:
-            1fr 1fr;
-
-          gap: 15px;
-
-          margin-top: 22px;
-        }
-
-
-        .forecast-item {
-          padding: 18px;
-
-          border-radius: 14px;
-
-          background: #f7f9f6;
-
-          border:
-            1px solid #e8eee8;
-        }
-
-
-        .forecast-period {
-          color: #7d8982;
-
-          font-size: 11px;
-
-          font-weight: 800;
-
-          text-transform:
-            uppercase;
-        }
-
-
-        .forecast-value {
-          font-size: 25px;
-
-          font-weight: 850;
-
-          margin-top: 8px;
-        }
-
-
-        .forecast-probability {
-          color: #77857c;
-
-          font-size: 11px;
-
-          margin-top: 4px;
-        }
-
-
-        .rain-note {
-          margin-top: 15px;
-
-          padding:
-            12px 14px;
-
-          background: #f1f7df;
-
-          border-radius: 10px;
-
-          color: #54622d;
-
-          font-size: 12px;
-        }
-
-
-        /* ================================================
-           INSIGHTS
-        ================================================ */
-
-        .insight-grid {
-          display: grid;
-
-          grid-template-columns:
-            repeat(2,1fr);
-
-          gap: 12px;
-
-          margin-top: 20px;
-        }
-
-
-        .insight {
-          padding: 17px;
-
-          border-radius: 14px;
-
-          background: #f8faf7;
-
-          border:
-            1px solid #e8eee8;
-        }
-
-
-        .insight-label {
-          color: #7a8780;
-
-          font-size: 11px;
-
-          font-weight: 700;
-        }
-
-
-        .insight-value {
-          font-size: 22px;
-
-          font-weight: 850;
-
-          margin-top: 5px;
-        }
-
-
-        /* ================================================
-           WATER TANK
-        ================================================ */
-
-        .tank-panel {
-          margin-bottom: 22px;
-        }
-
-
-        .tank-head {
-          display: flex;
-
-          justify-content:
-            space-between;
-
-          align-items: center;
-
-          gap: 15px;
-        }
-
-
-        .tank-status {
-          padding:
-            6px 10px;
-
-          border-radius: 999px;
-
-          font-size: 10px;
-
-          font-weight: 850;
-        }
-
-
-        .tank-status.normal {
-          background: #edf7df;
-
-          color: #4e7021;
-        }
-
-
-        .tank-status.low {
-          background: #fff4d9;
-
-          color: #8a6515;
-        }
-
-
-        .tank-status.critical {
-          background: #ffe8e4;
-
-          color: #a23d31;
-        }
-
-
-        .tank-bar {
-          height: 18px;
-
-          border-radius: 999px;
-
-          background: #edf1ed;
-
-          overflow: hidden;
-
-          margin-top: 18px;
-        }
-
-
-        .tank-fill {
-          height: 100%;
-
-          border-radius: 999px;
-
-          background: #8fcf32;
-
-          transition: width .5s;
-        }
-
-
-        .tank-meta {
-          display: flex;
-
-          justify-content:
-            space-between;
-
-          gap: 10px;
-
-          margin-top: 9px;
-
-          color: #748078;
-
-          font-size: 12px;
-        }
-
-
-        /* ================================================
-           PUMP
-        ================================================ */
-
-        .pump {
-          display: flex;
-
-          justify-content:
-            space-between;
-
-          align-items: center;
-
-          gap: 20px;
-
-          padding: 20px;
-
-          border-radius: 15px;
-
-          background: #102117;
-
-          color: white;
-        }
-
-
-        .pump-label {
-          color: #b9d95b;
-
-          font-size: 10px;
-
-          font-weight: 800;
-
-          letter-spacing: 1.5px;
-
-          text-transform:
-            uppercase;
-        }
-
-
-        .pump-time {
-          font-size: 29px;
-
-          font-weight: 850;
-
-          margin-top: 5px;
-        }
-
-
-        .pump-details {
-          color: #a9b9af;
-
-          font-size: 12px;
-
-          margin-top: 5px;
-        }
-
-
-        .manual-button {
-          border:
-            1px solid
-            rgba(255,255,255,.15);
-
-          background: white;
-
-          color: #14241a;
-
-          padding:
-            11px 15px;
-
-          border-radius: 10px;
-
-          font-weight: 800;
-        }
-
-
-        .manual-button.active {
-          background: #b9ef17;
-        }
-
-
-        /* ================================================
-           PLANT HEALTH
-        ================================================ */
-
-        .health-status {
-          display: flex;
-
-          align-items: center;
-
-          gap: 12px;
-
-          margin: 20px 0;
-        }
-
-
-        .health-dot {
-          width: 14px;
-          height: 14px;
-
-          background: #a8db22;
-
-          border-radius: 50%;
-
-          box-shadow:
-            0 0 0 5px #eef6d9;
-        }
-
-
-        .health-message {
-          color: #66736c;
-
-          line-height: 1.6;
-
-          font-size: 13px;
-        }
-
-
-        .health-list {
-          display: grid;
-
-          grid-template-columns:
-            repeat(4,1fr);
-
-          gap: 10px;
-
-          margin-top: 18px;
-        }
-
-
-        .health-item {
-          padding: 13px;
-
-          background: #f7f9f6;
-
-          border-radius: 10px;
-        }
-
-
-        .health-item span {
-          display: block;
-
-          color: #849088;
-
-          font-size: 10px;
-        }
-
-
-        .health-item strong {
-          display: block;
-
-          margin-top: 4px;
-        }
-
-
-        /* ================================================
-           ERROR
-        ================================================ */
-
-        .error {
-          margin-bottom: 18px;
-
-          padding:
-            12px 15px;
-
-          background: #fff2f0;
-
-          color: #9d3b31;
-
-          border:
-            1px solid #f2d5d0;
-
-          border-radius: 10px;
-
-          font-size: 12px;
-        }
-
-
-        /* ================================================
-           MOBILE
-        ================================================ */
-
-        @media (max-width:1100px) {
-
-          .configuration-grid,
-          .cards {
-            grid-template-columns:
-              repeat(2,1fr);
-          }
-
-          .two-column {
-            grid-template-columns: 1fr;
-          }
-
-          .health-list {
-            grid-template-columns:
-              repeat(2,1fr);
-          }
-
-        }
-
-
-        @media (max-width:800px) {
-
-          .sidebar {
-            width: 72px;
-
-            padding:
-              20px 10px;
-          }
-
-          .brand-name,
-          .brand-small,
-          .brand-subtitle,
-          .sidebar-bottom,
-          .nav-button span:not(.nav-icon) {
-            display: none;
-          }
-
-          .nav-button {
-            justify-content: center;
-          }
-
-          .main {
-            margin-left: 72px;
-
-            width:
-              calc(100% - 72px);
-
-            padding:
-              25px 18px 45px;
-          }
-
-          .hero {
-            grid-template-columns: 1fr;
-          }
-
-          .water-total {
-            width: 100%;
-          }
-
-        }
-
-
-        @media (max-width:600px) {
-
-          .configuration-grid,
-          .cards,
-          .forecast-row,
-          .insight-grid,
-          .health-list {
-            grid-template-columns: 1fr;
-          }
-
-          .topbar {
-            align-items:
-              flex-start;
-          }
-
-          .page-title {
-            font-size: 27px;
-          }
-
-          .pump {
-            align-items:
-              flex-start;
-
-            flex-direction:
-              column;
-          }
-
-          .connection-bar {
-            align-items:
-              flex-start;
-
-            flex-direction:
-              column;
-          }
-
-        }
-
-      `}</style>
-
-
-      <div className="agro-app">
-
-
-        {/* ==================================================
-            SIDEBAR
-        ================================================== */}
-
-        <aside className="sidebar">
-
-          <div className="brand">
-
-            <div className="brand-small">
-              Smart Agriculture
-            </div>
-
-            <div className="brand-name">
-              Agromind
-            </div>
-
-            <div className="brand-subtitle">
-              AI-Optimized Irrigation
-            </div>
-
-          </div>
-
-
-          <nav className="nav">
-
-            <button
-              className={
-                `nav-button ${
-                  activeSection === "overview"
-                    ? "active"
-                    : ""
-                }`
-              }
-              onClick={() =>
-                scrollToSection("overview")
-              }
-            >
-
-              <span className="nav-icon">
-                ⌂
-              </span>
-
-              <span>
-                Overview
-              </span>
-
-            </button>
-
-
-            <button
-              className={
-                `nav-button ${
-                  activeSection === "irrigation"
-                    ? "active"
-                    : ""
-                }`
-              }
-              onClick={() =>
-                scrollToSection("irrigation")
-              }
-            >
-
-              <span className="nav-icon">
-                💧
-              </span>
-
-              <span>
-                Irrigation
-              </span>
-
-            </button>
-
-
-            <button
-              className={
-                `nav-button ${
-                  activeSection === "weather"
-                    ? "active"
-                    : ""
-                }`
-              }
-              onClick={() =>
-                scrollToSection("weather")
-              }
-            >
-
-              <span className="nav-icon">
-                ☁
-              </span>
-
-              <span>
-                Weather
-              </span>
-
-            </button>
-
-
-            <button
-              className={
-                `nav-button ${
-                  activeSection === "water"
-                    ? "active"
-                    : ""
-                }`
-              }
-              onClick={() =>
-                scrollToSection("water")
-              }
-            >
-
-              <span className="nav-icon">
-                🚰
-              </span>
-
-              <span>
-                Water Tank
-              </span>
-
-            </button>
-
-
-            <button
-              className={
-                `nav-button ${
-                  activeSection === "plant-health"
-                    ? "active"
-                    : ""
-                }`
-              }
-              onClick={() =>
-                scrollToSection("plant-health")
-              }
-            >
-
-              <span className="nav-icon">
-                🌱
-              </span>
-
-              <span>
-                Plant Health
-              </span>
-
-            </button>
-
-          </nav>
-
-
-          <div className="sidebar-bottom">
-
-            <div>
-
-              <span
-                className={
-                  `online-dot ${
-                    isRealEsp32
-                      ? ""
-                      : "demo"
-                  }`
-                }
-              />
-
-              <span
-                className={
-                  `online-text ${
-                    isRealEsp32
-                      ? ""
-                      : "demo"
-                  }`
-                }
-              >
-
-                {isRealEsp32
-                  ? "ESP32 Online"
-                  : "Demo Mode"}
-
-              </span>
-
-            </div>
-
-
-            <div className="model-text">
-
-              AOSIS-v14 •{" "}
-              {farm.crop_type}
-
-            </div>
-
-          </div>
-
-        </aside>
-
-
-        {/* ==================================================
-            MAIN
-        ================================================== */}
-
-        <main className="main">
-
-
-          {/* HEADER */}
-
-          <header
-            className="topbar"
-            id="overview"
-          >
-
-            <div>
-
-              <div className="eyebrow">
-                AI-Optimized Irrigation
-              </div>
-
-              <h1 className="page-title">
-                Good morning, Farmer.
-              </h1>
-
-              <p className="page-subtitle">
-
-                {isRealEsp32
-                  ? "Your ESP32-S3 is sending live farm data."
-                  : "Here's what your farm needs today."}
-
-              </p>
-
-            </div>
-
-
-            <button
-              className="refresh-button"
-              onClick={() =>
-                loadDashboard(true)
-              }
-              disabled={loading}
-            >
-
-              ↻{" "}
-
-              {loading
-                ? "Refreshing..."
-                : "Refresh"}
-
-            </button>
-
-          </header>
-
-
-          {/* CONNECTION */}
-
-          <div className="connection-bar">
-
-            <div className="connection-left">
-
-              <span
-                className={
-                  `connection-led ${
-                    isRealEsp32
-                      ? "live"
-                      : ""
-                  }`
-                }
-              />
-
-              {isRealEsp32
-                ? "Live ESP32-S3 telemetry connected"
-                : "Waiting for ESP32-S3 telemetry"}
-
-            </div>
-
-
-            <div className="connection-time">
-
-              {telemetry.last_update
-
-                ? `Last update: ${
-                    new Date(
-                      telemetry.last_update
-                    ).toLocaleTimeString()
-                  }`
-
-                : "No live sensor update yet"}
-
-            </div>
-
-          </div>
-
-
-          {error && (
-
-            <div className="error">
-              {error}
-            </div>
-
-          )}
-
-
-          {/* ==================================================
-              FARM CONFIGURATION
-          ================================================== */}
-
-          <section className="configuration">
-
-            <div className="eyebrow">
-              Farm Setup
-            </div>
-
-            <h2 className="section-title">
-              Farm Configuration
-            </h2>
-
-            <div className="section-description">
-
-              These values describe the farmer's
-              field and irrigation equipment.
-              They are not ESP32 sensor readings.
-
-            </div>
-
-
-            <div className="configuration-grid">
-
-
-              {/* CROP */}
-
-              <div className="field">
-
-                <label>
-                  Crop
-                </label>
-
-                <select
-                  value={farm.crop_type}
-                  onChange={(e) =>
-                    updateFarm(
-                      "crop_type",
-                      e.target.value
+            soil_moisture_pct=
+                safe_float(
+                    data.get(
+                        "soil_moisture_pct"
                     )
-                  }
-                >
+                ),
 
-                  {CROP_OPTIONS.map(
-                    (crop) => (
-
-                      <option
-                        key={crop}
-                        value={crop}
-                      >
-                        {crop}
-                      </option>
-
+            soil_temperature_C=
+                safe_float(
+                    data.get(
+                        "soil_temperature_C"
                     )
-                  )}
+                ),
 
-                </select>
-
-              </div>
-
-
-              {/* LAND SIZE */}
-
-              <div className="field">
-
-                <label>
-                  Land Size
-                </label>
-
-                <div className="input-unit">
-
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={
-                      farm.land_size_m2
-                    }
-                    onChange={(e) =>
-                      updateFarm(
-                        "land_size_m2",
-                        e.target.value
-                      )
-                    }
-                  />
-
-                  <span>
-                    m²
-                  </span>
-
-                </div>
-
-              </div>
-
-
-              {/* CROP AGE */}
-
-              <div className="field">
-
-                <label>
-                  Crop Age
-                </label>
-
-                <div className="input-unit">
-
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={
-                      farm.crop_age_days
-                    }
-                    onChange={(e) =>
-                      updateFarm(
-                        "crop_age_days",
-                        e.target.value
-                      )
-                    }
-                  />
-
-                  <span>
-                    days
-                  </span>
-
-                </div>
-
-              </div>
-
-
-              {/* PUMP FLOW */}
-
-              <div className="field">
-
-                <label>
-                  Pump Flow Rate
-                </label>
-
-                <div className="input-unit">
-
-                  <input
-                    type="number"
-                    min="0.1"
-                    step="0.1"
-                    value={
-                      farm.pump_flow_L_min
-                    }
-                    onChange={(e) =>
-                      updateFarm(
-                        "pump_flow_L_min",
-                        e.target.value
-                      )
-                    }
-                  />
-
-                  <span>
-                    L/min
-                  </span>
-
-                </div>
-
-              </div>
-
-            </div>
-
-
-            <button
-              className="update-button"
-              style={{
-                marginTop: "18px",
-                width: "100%",
-              }}
-              onClick={
-                updateRecommendation
-              }
-              disabled={updating}
-            >
-
-              {updating
-                ? "Calculating New Recommendation..."
-                : "Update Recommendation"}
-
-            </button>
-
-          </section>
-
-
-          {/* ==================================================
-              IRRIGATION
-          ================================================== */}
-
-          <section
-            id="irrigation"
-            className="hero"
-          >
-
-            <div>
-
-              <div className="hero-label">
-                Today's Irrigation Recommendation
-              </div>
-
-
-              <div className="hero-main">
-
-                <span className="need">
-                  Need {needLevel}
-                </span>
-
-
-                <span className="depth">
-                  {number(
-                    irrigationDepth,
-                    3
-                  )}
-                </span>
-
-
-                <span className="mm">
-                  mm
-                </span>
-
-              </div>
-
-
-              <div className="hero-description">
-
-                Recommended daily application depth
-                based on live soil, weather and
-                crop conditions.
-
-              </div>
-
-
-              <div className="hero-actions">
-
-                <button
-                  className="primary-button"
-                  onClick={() =>
-                    scrollToSection(
-                      "pump-window"
+            solar_irradiance_W_m2=
+                safe_float(
+                    data.get(
+                        "solar_irradiance_W_m2"
                     )
-                  }
-                >
+                ),
 
-                  💧 View Pump Schedule
+            rain_0_24h_mm=
+                safe_float(
+                    data.get(
+                        "rain_0_24h_mm"
+                    )
+                ),
 
-                </button>
+            rain_probability_0_24h=
+                safe_float(
+                    data.get(
+                        "rain_probability_0_24h"
+                    )
+                ),
 
+            rain_24_48h_mm=
+                safe_float(
+                    data.get(
+                        "rain_24_48h_mm"
+                    )
+                ),
 
-                <button
-                  className="secondary-button"
-                  onClick={
-                    updateRecommendation
-                  }
-                  disabled={updating}
-                >
+            rain_probability_24_48h=
+                safe_float(
+                    data.get(
+                        "rain_probability_24_48h"
+                    )
+                ),
 
-                  ↻ Recalculate
+            crop_type=
+                FARM_CONFIG[
+                    "crop_type"
+                ],
 
-                </button>
+            crop_age_days=
+                FARM_CONFIG[
+                    "crop_age_days"
+                ],
 
-              </div>
+            land_size_m2=
+                FARM_CONFIG[
+                    "land_size_m2"
+                ],
 
-            </div>
+            pump_flow_L_min=
+                FARM_CONFIG[
+                    "pump_flow_L_min"
+                ],
 
+            application_efficiency=
+                FARM_CONFIG[
+                    "application_efficiency"
+                ],
 
-            <div className="water-total">
+            start_time=
+                FARM_CONFIG[
+                    "start_time"
+                ]
+        )
 
-              <div
-                style={{
-                  fontSize: "35px",
-                }}
-              >
-                💧
-              </div>
 
-              <div className="water-number">
+        # ----------------------------------------------------
+        # SAVE LAST SCHEDULE
+        # ----------------------------------------------------
 
-                {number(
-                  waterRequired,
-                  2
-                )}
+        LAST_SCHEDULE = result
 
-              </div>
 
-              <div className="water-label">
+        # ----------------------------------------------------
+        # UPDATE COMMAND
+        # ----------------------------------------------------
 
-                Litres required today
+        save_irrigation_command(
+            result
+        )
 
-              </div>
 
-            </div>
+        return jsonify(
+            result
+        )
 
-          </section>
 
+    except Exception as exc:
 
-          {/* ==================================================
-              SENSOR CARDS
-          ================================================== */}
+        return jsonify({
 
-          <section className="cards">
+            "error":
+                str(exc)
 
+        }), 400
 
-            {/* SOIL */}
 
-            <div className="card">
+# ============================================================
+# WEATHER
+# ============================================================
 
-              <div className="card-icon">
-                💧
-              </div>
+@app.get("/api/weather")
+def weather():
 
-              <div className="card-title">
-                Soil Moisture
-              </div>
+    lat = request.args.get(
+        "lat",
+        type=float
+    )
 
-              <div className="card-value">
+    lon = request.args.get(
+        "lon",
+        type=float
+    )
 
-                {number(
-                  telemetry.soil_moisture_pct,
-                  0
-                )}%
 
-              </div>
+    if lat is None or lon is None:
 
-              <div className="card-source">
+        return jsonify({
 
-                {isRealEsp32
-                  ? "ESP32-S3 live sensor"
-                  : "Waiting for sensor"}
+            "error":
+                "lat and lon are required"
 
-              </div>
+        }), 400
 
-            </div>
 
+    try:
 
-            {/* TEMPERATURE */}
+        result = get_weather(
+            lat,
+            lon
+        )
 
-            <div className="card">
 
-              <div className="card-icon">
-                🌡
-              </div>
+        return jsonify(
+            result
+        )
 
-              <div className="card-title">
-                Temperature / Humidity
-              </div>
 
-              <div className="card-value">
+    except Exception as exc:
 
-                {number(
-                  telemetry.soil_temperature_C,
-                  1
-                )}°C
+        return jsonify({
 
-              </div>
+            "error":
+                str(exc)
 
-              <div className="card-source">
+        }), 502
 
-                {number(
-                  telemetry.humidity_pct,
-                  1
-                )}% humidity • DHT22
 
-              </div>
+# ============================================================
+# ESP32 TELEMETRY
+# ============================================================
 
-            </div>
+@app.post("/api/telemetry")
+def telemetry():
 
+    global LATEST_TELEMETRY
+    global IRRIGATION_COMMAND
+    global LAST_SCHEDULE
 
-            {/* WATER */}
 
-            <div className="card">
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-              <div className="card-icon">
-                🚰
-              </div>
 
-              <div className="card-title">
-                Water Tank
-              </div>
+    if not data:
 
-              <div className="card-value">
+        return jsonify({
 
-                {number(
-                  waterLevel,
-                  0
-                )}%
+            "status":
+                "error",
 
-              </div>
+            "message":
+                "No telemetry data received",
 
-              <div className="card-source">
+            "irrigate":
+                False,
 
-                {number(
-                  waterRemaining,
-                  3
-                )} L remaining
-
-                {" • "}
-
-                ADC{" "}
-                {telemetry.water_sensor_adc ?? "--"}
-
-              </div>
-
-            </div>
-
-
-            {/* RAIN */}
-
-            <div className="card">
-
-              <div className="card-icon">
-                🌧
-              </div>
-
-              <div className="card-title">
-                Rain — 48 hours
-              </div>
-
-              <div className="card-value">
-
-                {number(
-                  telemetry.rain_24_48h_mm,
-                  1
-                )} mm
-
-              </div>
-
-              <div className="card-source">
-
-                {percent(
-                  telemetry.rain_probability_24_48h
-                )}
-
-                {" probability • OpenWeather"}
-
-              </div>
-
-            </div>
-
-          </section>
-
-
-          {/* ==================================================
-              WEATHER
-          ================================================== */}
-
-          <section
-            id="weather"
-            className="two-column"
-          >
-
-
-            <div className="panel">
-
-              <h3>
-                48-hour forecast
-              </h3>
-
-              <div className="panel-description">
-
-                Rainfall-aware scheduling from OpenWeather
-
-              </div>
-
-
-              <div className="forecast-row">
-
-
-                <div className="forecast-item">
-
-                  <div className="forecast-period">
-                    Next 24 hours
-                  </div>
-
-                  <div className="forecast-value">
-
-                    {number(
-                      telemetry.rain_0_24h_mm,
-                      1
-                    )} mm
-
-                  </div>
-
-                  <div className="forecast-probability">
-
-                    {percent(
-                      telemetry.rain_probability_0_24h
-                    )}
-
-                    {" probability"}
-
-                  </div>
-
-                </div>
-
-
-                <div className="forecast-item">
-
-                  <div className="forecast-period">
-                    24–48 hours
-                  </div>
-
-                  <div className="forecast-value">
-
-                    {number(
-                      telemetry.rain_24_48h_mm,
-                      1
-                    )} mm
-
-                  </div>
-
-                  <div className="forecast-probability">
-
-                    {percent(
-                      telemetry.rain_probability_24_48h
-                    )}
-
-                    {" probability"}
-
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              <div className="rain-note">
-
-                🌿 Agromind considers expected
-                rainfall before calculating the
-                irrigation requirement.
-
-              </div>
-
-
-              <div
-                style={{
-                  marginTop: "18px",
-                  color: "#718078",
-                  fontSize: "12px",
-                }}
-              >
-
-                Solar irradiance:{" "}
-
-                <strong>
-
-                  {number(
-                    telemetry.solar_irradiance_W_m2,
-                    0
-                  )}
-
-                  {" W/m²"}
-
-                </strong>
-
-              </div>
-
-            </div>
-
-
-            {/* INSIGHTS */}
-
-            <div className="panel">
-
-              <h3>
-                Water & Irrigation Insights
-              </h3>
-
-              <div className="panel-description">
-
-                Calculated from your current
-                farm settings
-
-              </div>
-
-
-              <div className="insight-grid">
-
-
-                <div className="insight">
-
-                  <div className="insight-label">
-                    Water Required
-                  </div>
-
-                  <div className="insight-value">
-
-                    {number(
-                      waterRequired,
-                      0
-                    )} L
-
-                  </div>
-
-                </div>
-
-
-                <div className="insight">
-
-                  <div className="insight-label">
-                    Pump Runtime
-                  </div>
-
-                  <div className="insight-value">
-
-                    {number(
-                      pumpRuntime,
-                      2
-                    )} min
-
-                  </div>
-
-                </div>
-
-
-                <div className="insight">
-
-                  <div className="insight-label">
-                    Pump Flow
-                  </div>
-
-                  <div className="insight-value">
-
-                    {number(
-                      pumpFlow,
-                      1
-                    )} L/min
-
-                  </div>
-
-                </div>
-
-
-                <div className="insight">
-
-                  <div className="insight-label">
-                    Efficiency
-                  </div>
-
-                  <div className="insight-value">
-
-                    {number(
-                      Number(
-                        farm.application_efficiency
-                      ) * 100,
-                      0
-                    )}%
-
-                  </div>
-
-                </div>
-
-              </div>
-
-            </div>
-
-          </section>
-
-
-          {/* ==================================================
-              WATER TANK
-          ================================================== */}
-
-          <section
-            id="water"
-            className="panel tank-panel"
-          >
-
-            <div className="tank-head">
-
-              <div>
-
-                <div className="eyebrow">
-                  Water Storage
-                </div>
-
-                <h3>
-                  Tank Level
-                </h3>
-
-                <div className="panel-description">
-
-                  Measured by the resistive
-                  water-level sensor connected
-                  to GPIO 3.
-
-                </div>
-
-              </div>
-
-
-              <span
-                className={
-                  `tank-status ${
-                    waterStatusClass
-                  }`
-                }
-              >
-
-                {waterStatus}
-
-              </span>
-
-            </div>
-
-
-            <div className="tank-bar">
-
-              <div
-                className="tank-fill"
-                style={{
-                  width:
-                    `${Math.max(
-                      0,
-                      Math.min(
-                        100,
-                        waterLevel
-                      )
-                    )}%`,
-                }}
-              />
-
-            </div>
-
-
-            <div className="tank-meta">
-
-              <span>
-                {number(
-                  waterLevel,
-                  1
-                )}% full
-              </span>
-
-              <span>
-                {number(
-                  waterRemaining,
-                  3
-                )} L remaining
-              </span>
-
-              <span>
-                ADC:{" "}
-                {telemetry.water_sensor_adc ??
-                  "--"}
-              </span>
-
-            </div>
-
-          </section>
-
-
-          {/* ==================================================
-              PUMP WINDOW
-          ================================================== */}
-
-          <section
-            id="pump-window"
-            className="panel"
-            style={{
-              marginBottom: "22px",
-            }}
-          >
-
-            <div className="eyebrow">
-              Today's Pump Window
-            </div>
-
-
-            <div className="pump">
-
-              <div>
-
-                <div className="pump-label">
-                  Recommended operation
-                </div>
-
-
-                <div className="pump-time">
-
-                  {schedule?.recommended_start ||
-                    farm.start_time ||
-                    "06:00"}
-
-                  {" – "}
-
-                  {schedule?.recommended_end ||
-                    "--:--"}
-
-                </div>
-
-
-                <div className="pump-details">
-
-                  {number(
-                    pumpRuntime,
-                    2
-                  )}
-
-                  {" minutes • "}
-
-                  {number(
-                    pumpFlow,
-                    1
-                  )}
-
-                  {" L/min • "}
-
-                  {number(
-                    waterRequired,
-                    2
-                  )}
-
-                  {" L"}
-
-                </div>
-
-              </div>
-
-
-              <button
-                className={
-                  manualMode
-                    ? "manual-button active"
-                    : "manual-button"
-                }
-                onClick={() =>
-                  setManualMode(
-                    (value) =>
-                      !value
-                  )
-                }
-              >
-
-                ⚡{" "}
-
-                {manualMode
-                  ? "Manual Mode ON"
-                  : "Manual Override"}
-
-              </button>
-
-            </div>
-
-          </section>
-
-
-          {/* ==================================================
-              PLANT HEALTH
-          ================================================== */}
-
-          <section
-            id="plant-health"
-            className="panel"
-          >
-
-            <div className="eyebrow">
-              Crop Monitoring
-            </div>
-
-
-            <h3>
-              Plant Health
-            </h3>
-
-
-            <div className="health-status">
-
-              <div className="health-dot"></div>
-
-              <strong>
-                {needLevel}
-                {" "}
-                irrigation requirement
-              </strong>
-
-            </div>
-
-
-            <div className="health-message">
-
-              Your{" "}
-              {farm.crop_type}
-              {" "}crop is{" "}
-              {farm.crop_age_days}
-              {" "}days old.
-
-              {" "}Current soil moisture is{" "}
-              {number(
-                telemetry.soil_moisture_pct,
+            "runtime_seconds":
                 0
-              )}%.
 
-              {" "}Agromind combines crop
-              configuration, live soil data
-              and weather information to
-              calculate the irrigation
-              requirement.
-
-            </div>
+        }), 400
 
 
-            <div className="health-list">
+    # ========================================================
+    # SAVE TELEMETRY
+    # ========================================================
+
+    LATEST_TELEMETRY = {
+
+        "connected":
+            True,
+
+        "device_id":
+            data.get(
+                "device_id",
+                "AGROMIND-ESP32-S3"
+            ),
+
+        "soil_moisture_pct":
+            data.get(
+                "soil_moisture_pct"
+            ),
+
+        "soil_adc":
+            data.get(
+                "soil_adc"
+            ),
+
+        "soil_temperature_C":
+            data.get(
+                "soil_temperature_C"
+            ),
+
+        "humidity_pct":
+            data.get(
+                "humidity_pct"
+            ),
+
+        "water_sensor_adc":
+            data.get(
+                "water_sensor_adc"
+            ),
+
+        "water_level_pct":
+            data.get(
+                "water_level_pct"
+            ),
+
+        "water_remaining_L":
+            data.get(
+                "water_remaining_L"
+            ),
+
+        "water_status":
+            "UNKNOWN",
+
+        "last_update":
+            utc_now()
+    }
 
 
-              <div className="health-item">
+    # ========================================================
+    # WATER STATUS
+    # ========================================================
 
-                <span>
-                  Crop
-                </span>
-
-                <strong>
-                  {farm.crop_type}
-                </strong>
-
-              </div>
+    water_level = data.get(
+        "water_level_pct"
+    )
 
 
-              <div className="health-item">
+    try:
 
-                <span>
-                  Crop Age
-                </span>
+        if water_level is not None:
 
-                <strong>
-
-                  {farm.crop_age_days}
-                  {" "}days
-
-                </strong>
-
-              </div>
+            water_level = float(
+                water_level
+            )
 
 
-              <div className="health-item">
+            if water_level <= 10:
 
-                <span>
-                  Land Size
-                </span>
-
-                <strong>
-
-                  {number(
-                    farm.land_size_m2,
-                    0
-                  )} m²
-
-                </strong>
-
-              </div>
+                LATEST_TELEMETRY[
+                    "water_status"
+                ] = "CRITICAL"
 
 
-              <div className="health-item">
+            elif water_level <= 25:
 
-                <span>
-                  Soil ADC
-                </span>
-
-                <strong>
-
-                  {telemetry.soil_adc ??
-                    "--"}
-
-                </strong>
-
-              </div>
-
-            </div>
-
-          </section>
-
-        </main>
-
-      </div>
-
-    </>
-
-  );
-}
+                LATEST_TELEMETRY[
+                    "water_status"
+                ] = "LOW"
 
 
-createRoot(
-  document.getElementById("root")
-).render(
+            else:
 
-  <React.StrictMode>
+                LATEST_TELEMETRY[
+                    "water_status"
+                ] = "NORMAL"
 
-    <App />
 
-  </React.StrictMode>
+    except (
+        ValueError,
+        TypeError
+    ):
 
-);
+        LATEST_TELEMETRY[
+            "water_status"
+        ] = "UNKNOWN"
+
+
+    # ========================================================
+    # REQUIRED SENSOR VALIDATION
+    # ========================================================
+
+    required_sensor_values = [
+
+        "soil_moisture_pct",
+
+        "soil_temperature_C"
+    ]
+
+
+    missing_sensor_values = [
+
+        key
+        for key in required_sensor_values
+        if data.get(key) is None
+    ]
+
+
+    if missing_sensor_values:
+
+        IRRIGATION_COMMAND = {
+
+            "command_id":
+                "FAILSAFE",
+
+            "irrigate":
+                False,
+
+            "runtime_seconds":
+                0,
+
+            "runtime_minutes":
+                0,
+
+            "need_level":
+                "UNKNOWN",
+
+            "recommendation":
+                "INVALID SENSOR DATA",
+
+            "water_required_L":
+                0,
+
+            "irrigation_depth_mm":
+                0,
+
+            "recommended_start":
+                None,
+
+            "recommended_end":
+                None,
+
+            "model_version":
+                "AOSIS-v14",
+
+            "irrigation_status":
+                "FAILSAFE",
+
+            "last_decision":
+                utc_now()
+        }
+
+
+        LAST_SCHEDULE = None
+
+
+        return jsonify({
+
+            "status":
+                "received",
+
+            "message":
+                "Telemetry received but required sensor data is missing",
+
+            "irrigate":
+                False,
+
+            "runtime_seconds":
+                0,
+
+            "command_id":
+                "FAILSAFE",
+
+            "data":
+                LATEST_TELEMETRY
+
+        }), 200
+
+
+    # ========================================================
+    # AI SCHEDULER
+    # ========================================================
+
+    try:
+
+        scheduler_payload = build_scheduler_payload(
+
+            soil_moisture_pct=
+                data.get(
+                    "soil_moisture_pct"
+                ),
+
+            soil_temperature_C=
+                data.get(
+                    "soil_temperature_C"
+                )
+        )
+
+
+        schedule_result = create_schedule(
+            **scheduler_payload
+        )
+
+
+        LAST_SCHEDULE = schedule_result
+
+
+        # ----------------------------------------------------
+        # SAVE CURRENT COMMAND
+        # ----------------------------------------------------
+
+        save_irrigation_command(
+            schedule_result
+        )
+
+
+    except Exception as exc:
+
+        IRRIGATION_COMMAND = {
+
+            "command_id":
+                "AI-FAILSAFE",
+
+            "irrigate":
+                False,
+
+            "runtime_seconds":
+                0,
+
+            "runtime_minutes":
+                0,
+
+            "need_level":
+                "UNKNOWN",
+
+            "recommendation":
+                "AI SCHEDULER ERROR",
+
+            "water_required_L":
+                0,
+
+            "irrigation_depth_mm":
+                0,
+
+            "recommended_start":
+                None,
+
+            "recommended_end":
+                None,
+
+            "model_version":
+                "AOSIS-v14",
+
+            "irrigation_status":
+                "AI FAILSAFE",
+
+            "last_decision":
+                utc_now()
+        }
+
+
+        LAST_SCHEDULE = None
+
+
+        return jsonify({
+
+            "status":
+                "received",
+
+            "message":
+                "Telemetry received but AI scheduling failed",
+
+            "irrigate":
+                False,
+
+            "runtime_seconds":
+                0,
+
+            "command_id":
+                "AI-FAILSAFE",
+
+            "error":
+                str(exc),
+
+            "data":
+                LATEST_TELEMETRY
+
+        }), 200
+
+
+    # ========================================================
+    # RESPONSE TO ESP32
+    # ========================================================
+
+    return jsonify({
+
+        "status":
+            "received",
+
+        "message":
+            "Telemetry received and irrigation decision generated",
+
+        "server_time":
+            utc_now(),
+
+        "command_id":
+            IRRIGATION_COMMAND[
+                "command_id"
+            ],
+
+        "irrigate":
+            IRRIGATION_COMMAND[
+                "irrigate"
+            ],
+
+        "runtime_seconds":
+            IRRIGATION_COMMAND[
+                "runtime_seconds"
+            ],
+
+        "runtime_minutes":
+            IRRIGATION_COMMAND[
+                "runtime_minutes"
+            ],
+
+        "need_level":
+            IRRIGATION_COMMAND[
+                "need_level"
+            ],
+
+        "recommendation":
+            IRRIGATION_COMMAND[
+                "recommendation"
+            ],
+
+        "water_required_L":
+            IRRIGATION_COMMAND[
+                "water_required_L"
+            ],
+
+        "irrigation_depth_mm":
+            IRRIGATION_COMMAND[
+                "irrigation_depth_mm"
+            ],
+
+        "recommended_start":
+            IRRIGATION_COMMAND[
+                "recommended_start"
+            ],
+
+        "recommended_end":
+            IRRIGATION_COMMAND[
+                "recommended_end"
+            ],
+
+        "model_version":
+            IRRIGATION_COMMAND[
+                "model_version"
+            ],
+
+        "irrigation_status":
+            IRRIGATION_COMMAND[
+                "irrigation_status"
+            ],
+
+        "data":
+            LATEST_TELEMETRY
+
+    })
+
+
+# ============================================================
+# GET CURRENT ESP32 TELEMETRY
+# ============================================================
+
+@app.get("/api/telemetry")
+def get_telemetry():
+
+    return jsonify(
+        LATEST_TELEMETRY
+    )
+
+
+# ============================================================
+# GET CURRENT IRRIGATION COMMAND
+# ============================================================
+
+@app.get("/api/control")
+def get_control():
+
+    return jsonify(
+        IRRIGATION_COMMAND
+    )
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+@app.get("/api/dashboard")
+def dashboard():
+
+    # ========================================================
+    # REAL ESP32 DATA
+    # ========================================================
+
+    if LATEST_TELEMETRY[
+        "connected"
+    ]:
+
+        soil_moisture = (
+            LATEST_TELEMETRY[
+                "soil_moisture_pct"
+            ]
+        )
+
+        soil_temperature = (
+            LATEST_TELEMETRY[
+                "soil_temperature_C"
+            ]
+        )
+
+        humidity = (
+            LATEST_TELEMETRY[
+                "humidity_pct"
+            ]
+        )
+
+        water_level = (
+            LATEST_TELEMETRY[
+                "water_level_pct"
+            ]
+        )
+
+        water_remaining = (
+            LATEST_TELEMETRY[
+                "water_remaining_L"
+            ]
+        )
+
+        telemetry_source = (
+            "ESP32-S3"
+        )
+
+    else:
+
+        soil_moisture = 42.0
+
+        soil_temperature = 28.7
+
+        humidity = 70.0
+
+        water_level = 100.0
+
+        water_remaining = 0.5
+
+        telemetry_source = "DEMO"
+
+
+    # ========================================================
+    # WEATHER
+    # ========================================================
+
+    solar_irradiance = (
+        CURRENT_WEATHER[
+            "solar_irradiance_W_m2"
+        ]
+    )
+
+    rain_0_24 = (
+        CURRENT_WEATHER[
+            "rain_0_24h_mm"
+        ]
+    )
+
+    rain_probability_0_24 = (
+        CURRENT_WEATHER[
+            "rain_probability_0_24h"
+        ]
+    )
+
+    rain_24_48 = (
+        CURRENT_WEATHER[
+            "rain_24_48h_mm"
+        ]
+    )
+
+    rain_probability_24_48 = (
+        CURRENT_WEATHER[
+            "rain_probability_24_48h"
+        ]
+    )
+
+
+    # ========================================================
+    # SCHEDULE
+    #
+    # IMPORTANT:
+    #
+    # Do NOT blindly recalculate the AI schedule every time
+    # the dashboard is refreshed.
+    #
+    # The schedule is generated when:
+    #
+    # 1. The farmer presses Update Recommendation, OR
+    # 2. New ESP32 telemetry arrives.
+    #
+    # This prevents the frontend from appearing to reset.
+    # ========================================================
+
+    schedule_result = LAST_SCHEDULE
+
+
+    if schedule_result is None:
+
+        # ----------------------------------------------------
+        # Generate initial schedule
+        # ----------------------------------------------------
+
+        try:
+
+            scheduler_payload = build_scheduler_payload(
+
+                soil_moisture_pct=
+                    soil_moisture,
+
+                soil_temperature_C=
+                    soil_temperature
+            )
+
+
+            schedule_result = create_schedule(
+                **scheduler_payload
+            )
+
+
+            LAST_SCHEDULE = schedule_result
+
+
+            save_irrigation_command(
+                schedule_result
+            )
+
+
+        except Exception as exc:
+
+            return jsonify({
+
+                "error":
+                    "Unable to generate irrigation schedule",
+
+                "details":
+                    str(exc)
+
+            }), 500
+
+
+    # ========================================================
+    # TANK SAFETY
+    # ========================================================
+
+    tank_critical = False
+
+    tank_low = False
+
+
+    try:
+
+        current_level = float(
+            water_level
+        )
+
+
+        if current_level <= 10:
+
+            tank_critical = True
+
+
+        elif current_level <= 25:
+
+            tank_low = True
+
+
+    except (
+        ValueError,
+        TypeError
+    ):
+
+        pass
+
+
+    # ========================================================
+    # DASHBOARD IRRIGATION STATUS
+    # ========================================================
+
+    dashboard_irrigation_status = (
+
+        "BLOCKED — TANK CRITICALLY LOW"
+
+        if tank_critical
+
+        else
+
+        "WARNING — TANK LOW"
+
+        if tank_low
+
+        else
+
+        "IRRIGATION AVAILABLE"
+    )
+
+
+    # ========================================================
+    # RETURN DASHBOARD
+    # ========================================================
+
+    return jsonify({
+
+        "timestamp":
+            utc_now(),
+
+        "telemetry_source":
+            telemetry_source,
+
+
+        # ====================================================
+        # SENSOR DATA
+        # ====================================================
+
+        "telemetry": {
+
+            "soil_moisture_pct":
+                soil_moisture,
+
+            "soil_temperature_C":
+                soil_temperature,
+
+            "humidity_pct":
+                humidity,
+
+            "water_level_pct":
+                water_level,
+
+            "water_remaining_L":
+                water_remaining,
+
+            "water_status":
+                LATEST_TELEMETRY.get(
+                    "water_status",
+                    (
+                        "NORMAL"
+                        if telemetry_source == "DEMO"
+                        else "UNKNOWN"
+                    )
+                ),
+
+            "water_sensor_adc":
+                LATEST_TELEMETRY.get(
+                    "water_sensor_adc"
+                ),
+
+            "soil_adc":
+                LATEST_TELEMETRY.get(
+                    "soil_adc"
+                ),
+
+            "last_update":
+                LATEST_TELEMETRY.get(
+                    "last_update"
+                )
+        },
+
+
+        # ====================================================
+        # FARM
+        # ====================================================
+
+        "farm": {
+
+            "crop":
+                FARM_CONFIG[
+                    "crop_type"
+                ],
+
+            "crop_type":
+                FARM_CONFIG[
+                    "crop_type"
+                ],
+
+            "crop_age_days":
+                FARM_CONFIG[
+                    "crop_age_days"
+                ],
+
+            "land_size_m2":
+                FARM_CONFIG[
+                    "land_size_m2"
+                ],
+
+            "pump_flow_L_min":
+                FARM_CONFIG[
+                    "pump_flow_L_min"
+                ],
+
+            "application_efficiency":
+                FARM_CONFIG[
+                    "application_efficiency"
+                ],
+
+            "start_time":
+                FARM_CONFIG[
+                    "start_time"
+                ]
+        },
+
+
+        # ====================================================
+        # WEATHER
+        # ====================================================
+
+        "weather": {
+
+            "rain_next_24h_mm":
+                rain_0_24,
+
+            "rain_probability_next_24h":
+                rain_probability_0_24,
+
+            "rain_next_48h_mm":
+                rain_24_48,
+
+            "rain_probability_next_48h":
+                rain_probability_24_48,
+
+            "solar_irradiance_W_m2":
+                solar_irradiance
+        },
+
+
+        # ====================================================
+        # AI SCHEDULE
+        # ====================================================
+
+        "schedule":
+            schedule_result,
+
+
+        # ====================================================
+        # TANK SAFETY
+        # ====================================================
+
+        "irrigation_safety": {
+
+            "status":
+                dashboard_irrigation_status,
+
+            "tank_level_pct":
+                water_level,
+
+            "water_remaining_L":
+                water_remaining,
+
+            "tank_critical":
+                tank_critical,
+
+            "tank_low":
+                tank_low,
+
+            "pump_allowed":
+                not tank_critical,
+
+            "message": (
+
+                "AI recommends irrigation, "
+                "but pump operation is blocked "
+                "because the water tank is critically low."
+
+                if tank_critical
+
+                else
+
+                "Water tank is low. Irrigation should "
+                "be used cautiously."
+
+                if tank_low
+
+                else
+
+                "Water level is sufficient for irrigation."
+            )
+        },
+
+
+        # ====================================================
+        # CURRENT HARDWARE COMMAND
+        # ====================================================
+
+        "irrigation_command":
+            IRRIGATION_COMMAND
+
+    })
+
+
+# ============================================================
+# RUN LOCALLY / RENDER
+# ============================================================
+
+if __name__ == "__main__":
+
+    port = int(
+        os.getenv(
+            "PORT",
+            "10000"
+        )
+    )
+
+
+    app.run(
+
+        host="0.0.0.0",
+
+        port=port
+
+    )
