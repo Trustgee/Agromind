@@ -34,7 +34,6 @@ def utc_now():
 
 
 def safe_float(value, default=0.0):
-
     try:
 
         if value is None:
@@ -53,7 +52,6 @@ def safe_float(value, default=0.0):
 
 
 def safe_int(value, default=0):
-
     try:
 
         return int(float(value))
@@ -74,13 +72,17 @@ LATEST_TELEMETRY = {
     "device_id": None,
 
     "soil_moisture_pct": None,
+
     "soil_adc": None,
 
     "soil_temperature_C": None,
+
     "humidity_pct": None,
 
     "water_sensor_adc": None,
+
     "water_level_pct": None,
+
     "water_remaining_L": None,
 
     "water_status": "UNKNOWN",
@@ -153,10 +155,10 @@ FARM_CONFIG = {
 # ============================================================
 # WEATHER CONFIGURATION
 #
-# Weather comes from the weather service / OpenWeather.
+# Weather information comes from the weather service /
+# OpenWeather integration.
 #
-# IMPORTANT:
-# There is NO rain sensor in this system.
+# There is NO rain sensor being used.
 # ============================================================
 
 CURRENT_WEATHER = {
@@ -298,7 +300,9 @@ def build_scheduler_payload(
 # SAVE IRRIGATION COMMAND
 # ============================================================
 
-def save_irrigation_command(schedule_result):
+def save_irrigation_command(
+    schedule_result
+):
 
     global IRRIGATION_COMMAND
 
@@ -360,15 +364,24 @@ def save_irrigation_command(schedule_result):
     # ========================================================
 
     irrigate = (
+
         irrigation_depth > 0
+
         and pump_runtime_minutes > 0
+
     )
 
 
     irrigation_status = (
+
         "IRRIGATION APPROVED"
+
         if irrigate
-        else "NO IRRIGATION"
+
+        else
+
+        "NO IRRIGATION"
+
     )
 
 
@@ -376,8 +389,10 @@ def save_irrigation_command(schedule_result):
     # TANK SAFETY
     # ========================================================
 
-    water_level = LATEST_TELEMETRY.get(
-        "water_level_pct"
+    water_level = (
+        LATEST_TELEMETRY.get(
+            "water_level_pct"
+        )
     )
 
 
@@ -389,6 +404,7 @@ def save_irrigation_command(schedule_result):
                 water_level
             )
 
+
             if current_water_level <= 10:
 
                 irrigate = False
@@ -398,6 +414,7 @@ def save_irrigation_command(schedule_result):
                 irrigation_status = (
                     "BLOCKED — TANK CRITICALLY LOW"
                 )
+
 
         except (
             ValueError,
@@ -582,6 +599,7 @@ def schedule():
     global FARM_CONFIG
     global LAST_SCHEDULE
 
+
     data = request.get_json(
         silent=True
     ) or {}
@@ -612,14 +630,18 @@ def schedule():
         "crop_age_days",
 
         "land_size_m2"
+
     ]
 
 
     missing = [
 
         key
+
         for key in required
+
         if key not in data
+
     ]
 
 
@@ -800,14 +822,14 @@ def schedule():
 
 
         # ====================================================
-        # SAVE LAST SCHEDULE
+        # SAVE SCHEDULE
         # ====================================================
 
         LAST_SCHEDULE = result
 
 
         # ====================================================
-        # UPDATE ESP32 COMMAND
+        # UPDATE IRRIGATION COMMAND
         # ====================================================
 
         save_irrigation_command(
@@ -821,11 +843,6 @@ def schedule():
 
 
     except Exception as exc:
-
-        print(
-            "SCHEDULE ERROR:",
-            repr(exc)
-        )
 
         return jsonify({
 
@@ -869,6 +886,7 @@ def weather():
             lat,
             lon
         )
+
 
         return jsonify(
             result
@@ -976,6 +994,7 @@ def telemetry():
 
         "last_update":
             utc_now()
+
     }
 
 
@@ -1037,14 +1056,18 @@ def telemetry():
         "soil_moisture_pct",
 
         "soil_temperature_C"
+
     ]
 
 
     missing_sensor_values = [
 
         key
+
         for key in required_sensor_values
+
         if data.get(key) is None
+
     ]
 
 
@@ -1090,6 +1113,7 @@ def telemetry():
 
             "last_decision":
                 utc_now()
+
         }
 
 
@@ -1136,6 +1160,7 @@ def telemetry():
                 data.get(
                     "soil_temperature_C"
                 )
+
         )
 
 
@@ -1144,7 +1169,9 @@ def telemetry():
         )
 
 
-        LAST_SCHEDULE = schedule_result
+        LAST_SCHEDULE = (
+            schedule_result
+        )
 
 
         # ====================================================
@@ -1157,12 +1184,6 @@ def telemetry():
 
 
     except Exception as exc:
-
-        print(
-            "TELEMETRY AI ERROR:",
-            repr(exc)
-        )
-
 
         IRRIGATION_COMMAND = {
 
@@ -1204,6 +1225,7 @@ def telemetry():
 
             "last_decision":
                 utc_now()
+
         }
 
 
@@ -1348,488 +1370,745 @@ def get_control():
 @app.get("/api/dashboard")
 def dashboard():
 
-    # ========================================================
-    # DETERMINE TELEMETRY SOURCE
-    # ========================================================
-
-    esp32_connected = bool(
-        LATEST_TELEMETRY.get(
-            "connected",
-            False
-        )
-    )
+    global LAST_SCHEDULE
+    global IRRIGATION_COMMAND
 
 
-    if esp32_connected:
+    try:
 
-        telemetry_source = "ESP32-S3"
+        # ====================================================
+        # DETERMINE TELEMETRY SOURCE
+        # ====================================================
 
-        soil_moisture = safe_float(
+        esp32_connected = bool(
             LATEST_TELEMETRY.get(
-                "soil_moisture_pct"
-            ),
-            0
-        )
-
-        soil_temperature = safe_float(
-            LATEST_TELEMETRY.get(
-                "soil_temperature_C"
-            ),
-            0
-        )
-
-        humidity = safe_float(
-            LATEST_TELEMETRY.get(
-                "humidity_pct"
-            ),
-            0
-        )
-
-        water_level = safe_float(
-            LATEST_TELEMETRY.get(
-                "water_level_pct"
-            ),
-            0
-        )
-
-        water_remaining = safe_float(
-            LATEST_TELEMETRY.get(
-                "water_remaining_L"
-            ),
-            0
-        )
-
-    else:
-
-        telemetry_source = "DEMO"
-
-        soil_moisture = 42.0
-
-        soil_temperature = 28.7
-
-        humidity = 70.0
-
-        water_level = 100.0
-
-        water_remaining = 0.5
-
-
-    # ========================================================
-    # WEATHER
-    # ========================================================
-
-    solar_irradiance = safe_float(
-        CURRENT_WEATHER[
-            "solar_irradiance_W_m2"
-        ]
-    )
-
-    rain_0_24 = safe_float(
-        CURRENT_WEATHER[
-            "rain_0_24h_mm"
-        ]
-    )
-
-    rain_probability_0_24 = safe_float(
-        CURRENT_WEATHER[
-            "rain_probability_0_24h"
-        ]
-    )
-
-    rain_24_48 = safe_float(
-        CURRENT_WEATHER[
-            "rain_24_48h_mm"
-        ]
-    )
-
-    rain_probability_24_48 = safe_float(
-        CURRENT_WEATHER[
-            "rain_probability_24_48h"
-        ]
-    )
-
-
-    # ========================================================
-    # AI SCHEDULE
-    #
-    # IMPORTANT:
-    #
-    # Do not allow a scheduler error to destroy the dashboard.
-    #
-    # If a schedule already exists, use it.
-    #
-    # If there is no schedule yet, try to create one.
-    #
-    # If creation fails, return the dashboard anyway.
-    # ========================================================
-
-    schedule_result = LAST_SCHEDULE
-
-    scheduler_error = None
-
-
-    if schedule_result is None:
-
-        try:
-
-            scheduler_payload = build_scheduler_payload(
-
-                soil_moisture_pct=
-                    soil_moisture,
-
-                soil_temperature_C=
-                    soil_temperature
+                "connected",
+                False
             )
-
-
-            schedule_result = create_schedule(
-                **scheduler_payload
-            )
-
-
-            LAST_SCHEDULE = schedule_result
-
-
-            save_irrigation_command(
-                schedule_result
-            )
-
-
-        except Exception as exc:
-
-            scheduler_error = str(exc)
-
-            print(
-                "DASHBOARD AI ERROR:",
-                repr(exc)
-            )
-
-
-            # ------------------------------------------------
-            # Do NOT return HTTP 500.
-            #
-            # The ESP32 is still connected.
-            # The dashboard must still display its data.
-            # ------------------------------------------------
-
-            schedule_result = {
-
-                "irrigation_depth_mm":
-                    safe_float(
-                        IRRIGATION_COMMAND.get(
-                            "irrigation_depth_mm",
-                            0
-                        )
-                    ),
-
-                "water_required_L":
-                    safe_float(
-                        IRRIGATION_COMMAND.get(
-                            "water_required_L",
-                            0
-                        )
-                    ),
-
-                "pump_runtime_min":
-                    safe_float(
-                        IRRIGATION_COMMAND.get(
-                            "runtime_minutes",
-                            0
-                        )
-                    ),
-
-                "pump_flow_L_min":
-                    safe_float(
-                        FARM_CONFIG.get(
-                            "pump_flow_L_min",
-                            10
-                        )
-                    ),
-
-                "need_level":
-                    IRRIGATION_COMMAND.get(
-                        "need_level",
-                        "UNKNOWN"
-                    ),
-
-                "recommendation":
-                    IRRIGATION_COMMAND.get(
-                        "recommendation",
-                        "NO IRRIGATION"
-                    ),
-
-                "recommended_start":
-                    IRRIGATION_COMMAND.get(
-                        "recommended_start"
-                    ),
-
-                "recommended_end":
-                    IRRIGATION_COMMAND.get(
-                        "recommended_end"
-                    ),
-
-                "model_version":
-                    IRRIGATION_COMMAND.get(
-                        "model_version",
-                        "AOSIS-v14"
-                    ),
-
-                "scheduler_error":
-                    scheduler_error
-            }
-
-
-    # ========================================================
-    # TANK SAFETY
-    # ========================================================
-
-    tank_critical = (
-        water_level <= 10
-    )
-
-    tank_low = (
-        water_level > 10
-        and water_level <= 25
-    )
-
-
-    # ========================================================
-    # DASHBOARD IRRIGATION STATUS
-    # ========================================================
-
-    if tank_critical:
-
-        dashboard_irrigation_status = (
-            "BLOCKED — TANK CRITICALLY LOW"
         )
-
-        pump_allowed = False
-
-        safety_message = (
-            "AI may recommend irrigation, "
-            "but pump operation is blocked "
-            "because the water tank is critically low."
-        )
-
-    elif tank_low:
-
-        dashboard_irrigation_status = (
-            "WARNING — TANK LOW"
-        )
-
-        pump_allowed = True
-
-        safety_message = (
-            "Water tank is low. "
-            "Irrigation should be used cautiously."
-        )
-
-    else:
-
-        dashboard_irrigation_status = (
-            "IRRIGATION AVAILABLE"
-        )
-
-        pump_allowed = True
-
-        safety_message = (
-            "Water level is sufficient for irrigation."
-        )
-
-
-    # ========================================================
-    # BUILD RESPONSE
-    # ========================================================
-
-    response = {
-
-        "timestamp":
-            utc_now(),
-
-        "telemetry_source":
-            telemetry_source,
-
-        "esp32_connected":
-            esp32_connected,
 
 
         # ====================================================
-        # SENSOR DATA
+        # LIVE ESP32 DATA
         # ====================================================
 
-        "telemetry": {
+        if esp32_connected:
 
-            "soil_moisture_pct":
-                soil_moisture,
-
-            "soil_temperature_C":
-                soil_temperature,
-
-            "humidity_pct":
-                humidity,
-
-            "water_level_pct":
-                water_level,
-
-            "water_remaining_L":
-                water_remaining,
-
-            "water_status":
+            soil_moisture = safe_float(
                 LATEST_TELEMETRY.get(
-                    "water_status",
-                    "UNKNOWN"
+                    "soil_moisture_pct"
                 ),
+                0.0
+            )
 
-            "water_sensor_adc":
+
+            soil_temperature = safe_float(
                 LATEST_TELEMETRY.get(
-                    "water_sensor_adc"
+                    "soil_temperature_C"
                 ),
+                0.0
+            )
 
-            "soil_adc":
+
+            humidity = safe_float(
                 LATEST_TELEMETRY.get(
-                    "soil_adc"
+                    "humidity_pct"
                 ),
+                0.0
+            )
 
-            "last_update":
+
+            water_level = safe_float(
                 LATEST_TELEMETRY.get(
-                    "last_update"
-                )
-        },
+                    "water_level_pct"
+                ),
+                0.0
+            )
 
 
-        # ====================================================
-        # FARM
-        # ====================================================
+            water_remaining = safe_float(
+                LATEST_TELEMETRY.get(
+                    "water_remaining_L"
+                ),
+                0.0
+            )
 
-        "farm": {
 
-            "crop":
-                FARM_CONFIG[
-                    "crop_type"
-                ],
+            telemetry_source = (
+                "ESP32-S3"
+            )
 
-            "crop_type":
-                FARM_CONFIG[
-                    "crop_type"
-                ],
 
-            "crop_age_days":
-                FARM_CONFIG[
-                    "crop_age_days"
-                ],
+        else:
 
-            "land_size_m2":
-                FARM_CONFIG[
-                    "land_size_m2"
-                ],
+            # =================================================
+            # DEMO DATA ONLY IF ESP32 HAS NOT CONNECTED
+            # =================================================
 
-            "pump_flow_L_min":
-                FARM_CONFIG[
-                    "pump_flow_L_min"
-                ],
+            soil_moisture = 42.0
 
-            "application_efficiency":
-                FARM_CONFIG[
-                    "application_efficiency"
-                ],
+            soil_temperature = 28.7
 
-            "start_time":
-                FARM_CONFIG[
-                    "start_time"
-                ]
-        },
+            humidity = 70.0
+
+            water_level = 100.0
+
+            water_remaining = 0.5
+
+            telemetry_source = "DEMO"
 
 
         # ====================================================
         # WEATHER
         # ====================================================
 
-        "weather": {
+        solar_irradiance = safe_float(
+            CURRENT_WEATHER.get(
+                "solar_irradiance_W_m2"
+            ),
+            0.0
+        )
 
-            "rain_next_24h_mm":
-                rain_0_24,
 
-            "rain_probability_next_24h":
-                rain_probability_0_24,
+        rain_0_24 = safe_float(
+            CURRENT_WEATHER.get(
+                "rain_0_24h_mm"
+            ),
+            0.0
+        )
 
-            "rain_next_48h_mm":
-                rain_24_48,
 
-            "rain_probability_next_48h":
-                rain_probability_24_48,
+        rain_probability_0_24 = safe_float(
+            CURRENT_WEATHER.get(
+                "rain_probability_0_24h"
+            ),
+            0.0
+        )
 
-            "solar_irradiance_W_m2":
-                solar_irradiance
-        },
+
+        rain_24_48 = safe_float(
+            CURRENT_WEATHER.get(
+                "rain_24_48h_mm"
+            ),
+            0.0
+        )
+
+
+        rain_probability_24_48 = safe_float(
+            CURRENT_WEATHER.get(
+                "rain_probability_24_48h"
+            ),
+            0.0
+        )
+
+
+        # ====================================================
+        # FARM CONFIGURATION
+        # ====================================================
+
+        crop_type = FARM_CONFIG.get(
+            "crop_type",
+            "Tomato"
+        )
+
+
+        crop_age_days = safe_int(
+            FARM_CONFIG.get(
+                "crop_age_days",
+                60
+            ),
+            60
+        )
+
+
+        land_size_m2 = safe_float(
+            FARM_CONFIG.get(
+                "land_size_m2",
+                100
+            ),
+            100.0
+        )
+
+
+        pump_flow = safe_float(
+            FARM_CONFIG.get(
+                "pump_flow_L_min",
+                10
+            ),
+            10.0
+        )
+
+
+        efficiency = safe_float(
+            FARM_CONFIG.get(
+                "application_efficiency",
+                0.75
+            ),
+            0.75
+        )
+
+
+        start_time = FARM_CONFIG.get(
+            "start_time",
+            "06:00"
+        )
 
 
         # ====================================================
         # AI SCHEDULE
+        #
+        # Do not recalculate on every dashboard refresh.
+        #
+        # A schedule is generated when:
+        #
+        # 1. ESP32 sends new telemetry
+        # 2. Farmer presses Update Recommendation
+        #
         # ====================================================
 
-        "schedule":
-            schedule_result,
+        schedule_result = LAST_SCHEDULE
+
+        schedule_error = None
 
 
         # ====================================================
-        # TANK SAFETY
+        # CREATE INITIAL SCHEDULE IF NECESSARY
         # ====================================================
 
-        "irrigation_safety": {
+        if schedule_result is None:
+
+            try:
+
+                scheduler_payload = {
+
+                    "soil_moisture_pct":
+                        soil_moisture,
+
+                    "soil_temperature_C":
+                        soil_temperature,
+
+                    "solar_irradiance_W_m2":
+                        solar_irradiance,
+
+                    "rain_0_24h_mm":
+                        rain_0_24,
+
+                    "rain_probability_0_24h":
+                        rain_probability_0_24,
+
+                    "rain_24_48h_mm":
+                        rain_24_48,
+
+                    "rain_probability_24_48h":
+                        rain_probability_24_48,
+
+                    "crop_type":
+                        crop_type,
+
+                    "crop_age_days":
+                        crop_age_days,
+
+                    "land_size_m2":
+                        land_size_m2,
+
+                    "pump_flow_L_min":
+                        pump_flow,
+
+                    "application_efficiency":
+                        efficiency,
+
+                    "start_time":
+                        start_time
+
+                }
+
+
+                schedule_result = create_schedule(
+                    **scheduler_payload
+                )
+
+
+                LAST_SCHEDULE = (
+                    schedule_result
+                )
+
+
+                save_irrigation_command(
+                    schedule_result
+                )
+
+
+            except Exception as exc:
+
+                schedule_error = str(
+                    exc
+                )
+
+
+                # --------------------------------------------
+                # DO NOT CRASH DASHBOARD
+                # --------------------------------------------
+
+                schedule_result = {
+
+                    "need_level":
+                        "UNKNOWN",
+
+                    "recommendation":
+                        "AI SCHEDULE UNAVAILABLE",
+
+                    "irrigation_depth_mm":
+                        0,
+
+                    "water_required_L":
+                        0,
+
+                    "pump_runtime_min":
+                        0,
+
+                    "recommended_start":
+                        start_time,
+
+                    "recommended_end":
+                        None,
+
+                    "pump_flow_L_min":
+                        pump_flow,
+
+                    "model_version":
+                        "AOSIS-v14"
+
+                }
+
+
+        # ====================================================
+        # WATER TANK STATUS
+        # ====================================================
+
+        tank_critical = (
+            water_level <= 10
+        )
+
+
+        tank_low = (
+            water_level > 10
+            and water_level <= 25
+        )
+
+
+        if tank_critical:
+
+            dashboard_irrigation_status = (
+                "BLOCKED — TANK CRITICALLY LOW"
+            )
+
+        elif tank_low:
+
+            dashboard_irrigation_status = (
+                "WARNING — TANK LOW"
+            )
+
+        else:
+
+            dashboard_irrigation_status = (
+                "IRRIGATION AVAILABLE"
+            )
+
+
+        # ====================================================
+        # WATER STATUS
+        # ====================================================
+
+        water_status = (
+            LATEST_TELEMETRY.get(
+                "water_status"
+            )
+        )
+
+
+        if not water_status or water_status == "UNKNOWN":
+
+            if tank_critical:
+
+                water_status = "CRITICAL"
+
+            elif tank_low:
+
+                water_status = "LOW"
+
+            else:
+
+                water_status = "NORMAL"
+
+
+        # ====================================================
+        # DASHBOARD RESPONSE
+        # ====================================================
+
+        response = {
+
+            "timestamp":
+                utc_now(),
+
+
+            # =================================================
+            # THIS IS CRITICAL FOR THE REACT FRONTEND
+            # =================================================
+
+            "telemetry_source":
+                telemetry_source,
+
+
+            # =================================================
+            # TELEMETRY
+            # =================================================
+
+            "telemetry": {
+
+                "connected":
+                    esp32_connected,
+
+                "device_id":
+                    LATEST_TELEMETRY.get(
+                        "device_id"
+                    ),
+
+                "soil_moisture_pct":
+                    soil_moisture,
+
+                "soil_temperature_C":
+                    soil_temperature,
+
+                "humidity_pct":
+                    humidity,
+
+                "soil_adc":
+                    LATEST_TELEMETRY.get(
+                        "soil_adc"
+                    ),
+
+                "water_sensor_adc":
+                    LATEST_TELEMETRY.get(
+                        "water_sensor_adc"
+                    ),
+
+                "water_level_pct":
+                    water_level,
+
+                "water_remaining_L":
+                    water_remaining,
+
+                "water_status":
+                    water_status,
+
+                "last_update":
+                    LATEST_TELEMETRY.get(
+                        "last_update"
+                    ),
+
+                # --------------------------------------------
+                # WEATHER IS INCLUDED HERE BECAUSE YOUR
+                # REACT FRONTEND READS THESE VALUES FROM
+                # telemetry.*
+                # --------------------------------------------
+
+                "solar_irradiance_W_m2":
+                    solar_irradiance,
+
+                "rain_0_24h_mm":
+                    rain_0_24,
+
+                "rain_probability_0_24h":
+                    rain_probability_0_24,
+
+                "rain_24_48h_mm":
+                    rain_24_48,
+
+                "rain_probability_24_48h":
+                    rain_probability_24_48
+
+            },
+
+
+            # =================================================
+            # FARM
+            # =================================================
+
+            "farm": {
+
+                "crop":
+                    crop_type,
+
+                "crop_type":
+                    crop_type,
+
+                "crop_age_days":
+                    crop_age_days,
+
+                "land_size_m2":
+                    land_size_m2,
+
+                "pump_flow_L_min":
+                    pump_flow,
+
+                "application_efficiency":
+                    efficiency,
+
+                "start_time":
+                    start_time
+
+            },
+
+
+            # =================================================
+            # WEATHER
+            # =================================================
+
+            "weather": {
+
+                "rain_next_24h_mm":
+                    rain_0_24,
+
+                "rain_probability_next_24h":
+                    rain_probability_0_24,
+
+                "rain_next_48h_mm":
+                    rain_24_48,
+
+                "rain_probability_next_48h":
+                    rain_probability_24_48,
+
+                "solar_irradiance_W_m2":
+                    solar_irradiance
+
+            },
+
+
+            # =================================================
+            # AI SCHEDULE
+            # =================================================
+
+            "schedule":
+                schedule_result,
+
+
+            # =================================================
+            # AI SCHEDULE ERROR
+            # =================================================
+
+            "schedule_error":
+                schedule_error,
+
+
+            # =================================================
+            # TANK SAFETY
+            # =================================================
+
+            "irrigation_safety": {
+
+                "status":
+                    dashboard_irrigation_status,
+
+                "tank_level_pct":
+                    water_level,
+
+                "water_remaining_L":
+                    water_remaining,
+
+                "tank_critical":
+                    tank_critical,
+
+                "tank_low":
+                    tank_low,
+
+                "pump_allowed":
+                    not tank_critical,
+
+                "message": (
+
+                    "AI recommends irrigation, "
+                    "but pump operation is blocked "
+                    "because the water tank is critically low."
+
+                    if tank_critical
+
+                    else
+
+                    "Water tank is low. Irrigation "
+                    "should be used cautiously."
+
+                    if tank_low
+
+                    else
+
+                    "Water level is sufficient "
+                    "for irrigation."
+
+                )
+
+            },
+
+
+            # =================================================
+            # CURRENT HARDWARE COMMAND
+            # =================================================
+
+            "irrigation_command":
+                IRRIGATION_COMMAND
+
+        }
+
+
+        # ====================================================
+        # ALWAYS RETURN HTTP 200 FOR A VALID DASHBOARD
+        # ====================================================
+
+        return jsonify(
+            response
+        ), 200
+
+
+    # ========================================================
+    # ABSOLUTE DASHBOARD FAILSAFE
+    # ========================================================
+
+    except Exception as exc:
+
+        # ----------------------------------------------------
+        # The dashboard should never show the generic Flask
+        # Internal Server Error page.
+        #
+        # Even if something unexpected happens, return the
+        # telemetry that we already have.
+        # ----------------------------------------------------
+
+        return jsonify({
 
             "status":
-                dashboard_irrigation_status,
+                "dashboard_failsafe",
 
-            "tank_level_pct":
-                water_level,
+            "telemetry_source": (
 
-            "water_remaining_L":
-                water_remaining,
+                "ESP32-S3"
 
-            "tank_critical":
-                tank_critical,
+                if LATEST_TELEMETRY.get(
+                    "connected",
+                    False
+                )
 
-            "tank_low":
-                tank_low,
+                else
 
-            "pump_allowed":
-                pump_allowed,
+                "DEMO"
 
-            "message":
-                safety_message
-        },
+            ),
 
+            "telemetry": {
 
-        # ====================================================
-        # CURRENT HARDWARE COMMAND
-        # ====================================================
+                "connected":
+                    LATEST_TELEMETRY.get(
+                        "connected",
+                        False
+                    ),
 
-        "irrigation_command":
-            IRRIGATION_COMMAND
-    }
+                "device_id":
+                    LATEST_TELEMETRY.get(
+                        "device_id"
+                    ),
 
+                "soil_moisture_pct":
+                    LATEST_TELEMETRY.get(
+                        "soil_moisture_pct"
+                    ),
 
-    # ========================================================
-    # DIAGNOSTIC INFORMATION
-    # ========================================================
+                "soil_temperature_C":
+                    LATEST_TELEMETRY.get(
+                        "soil_temperature_C"
+                    ),
 
-    if scheduler_error:
+                "humidity_pct":
+                    LATEST_TELEMETRY.get(
+                        "humidity_pct"
+                    ),
 
-        response[
-            "scheduler_error"
-        ] = scheduler_error
+                "soil_adc":
+                    LATEST_TELEMETRY.get(
+                        "soil_adc"
+                    ),
 
+                "water_sensor_adc":
+                    LATEST_TELEMETRY.get(
+                        "water_sensor_adc"
+                    ),
 
-    # ========================================================
-    # ALWAYS RETURN 200
-    #
-    # The dashboard can display live ESP32 data even if
-    # the AI scheduler has an error.
-    # ========================================================
+                "water_level_pct":
+                    LATEST_TELEMETRY.get(
+                        "water_level_pct"
+                    ),
 
-    return jsonify(
-        response
-    ), 200
+                "water_remaining_L":
+                    LATEST_TELEMETRY.get(
+                        "water_remaining_L"
+                    ),
+
+                "water_status":
+                    LATEST_TELEMETRY.get(
+                        "water_status",
+                        "UNKNOWN"
+                    ),
+
+                "last_update":
+                    LATEST_TELEMETRY.get(
+                        "last_update"
+                    ),
+
+                "solar_irradiance_W_m2":
+                    CURRENT_WEATHER.get(
+                        "solar_irradiance_W_m2",
+                        0
+                    ),
+
+                "rain_0_24h_mm":
+                    CURRENT_WEATHER.get(
+                        "rain_0_24h_mm",
+                        0
+                    ),
+
+                "rain_probability_0_24h":
+                    CURRENT_WEATHER.get(
+                        "rain_probability_0_24h",
+                        0
+                    ),
+
+                "rain_24_48h_mm":
+                    CURRENT_WEATHER.get(
+                        "rain_24_48h_mm",
+                        0
+                    ),
+
+                "rain_probability_24_48h":
+                    CURRENT_WEATHER.get(
+                        "rain_probability_24_48h",
+                        0
+                    )
+
+            },
+
+            "farm":
+                FARM_CONFIG,
+
+            "weather":
+                CURRENT_WEATHER,
+
+            "schedule":
+                LAST_SCHEDULE,
+
+            "irrigation_command":
+                IRRIGATION_COMMAND,
+
+            "error":
+                str(exc)
+
+        }), 200
 
 
 # ============================================================
@@ -1844,6 +2123,7 @@ if __name__ == "__main__":
             "10000"
         )
     )
+
 
     app.run(
 
