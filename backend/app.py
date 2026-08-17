@@ -78,13 +78,6 @@ IRRIGATION_COMMAND = {
 # ============================================================
 # FARM CONFIGURATION
 # ============================================================
-#
-# These are currently the same values used by the existing
-# AgroMind dashboard.
-#
-# Later these can be connected directly to the farmer's
-# dashboard controls/database.
-#
 
 FARM_CONFIG = {
 
@@ -106,13 +99,15 @@ FARM_CONFIG = {
 # WEATHER / SOLAR CONFIGURATION
 # ============================================================
 #
-# These values currently match the existing dashboard logic.
+# Rainfall is currently supplied by the weather configuration.
 #
-# Rainfall can later be connected directly to the weather API.
+# The /api/weather endpoint below uses the OpenWeather service
+# implemented in services/weather.py.
 #
-# Solar irradiance can later be replaced with the physical
-# solar irradiance sensor reading.
-#
+# These values are retained as fallback/demo values for the
+# scheduler until live weather values are connected directly
+# to this telemetry cycle.
+# ============================================================
 
 CURRENT_WEATHER = {
 
@@ -368,7 +363,13 @@ def telemetry():
                 False,
 
             "runtime_seconds":
-                0
+                0,
+
+            "need_level":
+                "UNKNOWN",
+
+            "command_id":
+                "FAILSAFE"
 
         }), 400
 
@@ -498,10 +499,6 @@ def telemetry():
 
     if missing_sensor_values:
 
-        # ----------------------------------------------------
-        # FAIL SAFE
-        # ----------------------------------------------------
-
         IRRIGATION_COMMAND = {
 
             "command_id":
@@ -557,6 +554,9 @@ def telemetry():
             "runtime_seconds":
                 0,
 
+            "need_level":
+                "UNKNOWN",
+
             "command_id":
                 "FAILSAFE",
 
@@ -567,7 +567,7 @@ def telemetry():
 
 
     # ========================================================
-    # AI SCHEDULER INPUT
+    # AI SCHEDULER
     # ========================================================
 
     try:
@@ -656,9 +656,9 @@ def telemetry():
 
     except Exception as exc:
 
-        # ====================================================
+        # ----------------------------------------------------
         # AI FAILURE = PUMP OFF
-        # ====================================================
+        # ----------------------------------------------------
 
         IRRIGATION_COMMAND = {
 
@@ -714,6 +714,9 @@ def telemetry():
 
             "runtime_seconds":
                 0,
+
+            "need_level":
+                "UNKNOWN",
 
             "command_id":
                 "AI-FAILSAFE",
@@ -791,12 +794,28 @@ def telemetry():
 
 
     # ========================================================
-    # INITIAL IRRIGATION DECISION
+    # AI CONTROL DECISION
+    # ========================================================
+    #
+    # IMPORTANT:
+    #
+    # The ESP32 pump is authorized ONLY when the AI
+    # scheduler classifies the irrigation requirement as HIGH.
+    #
+    # LOW    -> Pump OFF
+    # MEDIUM -> Pump OFF
+    # HIGH   -> Pump ON if runtime > 0
+    #
+    # This keeps the AI model responsible for the irrigation
+    # decision rather than making the ESP32 independently
+    # determine irrigation need.
     # ========================================================
 
     irrigate = (
 
-        irrigation_depth > 0
+        need_level == "HIGH"
+
+        and irrigation_depth > 0
 
         and pump_runtime_minutes > 0
 
@@ -807,8 +826,9 @@ def telemetry():
     # CRITICAL WATER LEVEL SAFETY
     # ========================================================
     #
-    # If the tank is critically low, irrigation is cancelled.
-    #
+    # Even if the AI says HIGH, the pump must NOT operate
+    # when the tank is critically low.
+    # ========================================================
 
     try:
 
@@ -824,12 +844,26 @@ def telemetry():
 
                 pump_runtime_minutes = 0
 
+                recommendation = (
+                    "IRRIGATION CANCELLED - "
+                    "CRITICAL WATER LEVEL"
+                )
+
     except (
         ValueError,
         TypeError
     ):
 
-        pass
+        # Invalid tank reading = safe state
+
+        irrigate = False
+
+        pump_runtime_minutes = 0
+
+        recommendation = (
+            "IRRIGATION CANCELLED - "
+            "INVALID WATER LEVEL"
+        )
 
 
     # ========================================================
@@ -853,10 +887,6 @@ def telemetry():
     # ========================================================
     # COMMAND ID
     # ========================================================
-    #
-    # This prevents the ESP32 from treating identical
-    # repeated decisions as completely new commands.
-    #
 
     command_id = generate_command_id(
 
@@ -944,7 +974,7 @@ def telemetry():
 
 
     # ========================================================
-    # SEND DECISION BACK TO ESP32
+    # SEND AI COMMAND BACK TO ESP32
     # ========================================================
 
     return jsonify({
@@ -953,7 +983,7 @@ def telemetry():
             "received",
 
         "message":
-            "Telemetry received and irrigation decision generated",
+            "Telemetry received and AI irrigation decision generated",
 
         "server_time":
             datetime.now(
