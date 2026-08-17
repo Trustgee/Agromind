@@ -20,33 +20,56 @@ const DEFAULT_TELEMETRY = {
   soil_moisture_pct: 0,
   soil_temperature_C: 0,
   humidity_pct: 0,
+
   soil_adc: null,
+
   water_sensor_adc: null,
   water_level_pct: 0,
   water_remaining_L: 0,
   water_status: "UNKNOWN",
+
   solar_irradiance_W_m2: 0,
+
   rain_0_24h_mm: 0,
   rain_probability_0_24h: 0,
+
   rain_24_48h_mm: 0,
   rain_probability_24_48h: 0,
+
   last_update: null,
 };
 
+
+// ============================================================
+// READ SAVED FARM CONFIGURATION
+// ============================================================
+
 function readFarm() {
   try {
-    const saved = localStorage.getItem("agromind_farm");
+    const saved =
+      localStorage.getItem("agromind_farm");
 
     return saved
-      ? { ...DEFAULT_FARM, ...JSON.parse(saved) }
+      ? {
+          ...DEFAULT_FARM,
+          ...JSON.parse(saved),
+        }
       : DEFAULT_FARM;
+
   } catch {
     return DEFAULT_FARM;
   }
 }
 
+
+// ============================================================
+// APP
+// ============================================================
+
 function App() {
-  const [farm, setFarm] = useState(readFarm);
+
+  const [farm, setFarm] =
+    useState(readFarm);
 
   const [telemetry, setTelemetry] =
     useState(DEFAULT_TELEMETRY);
@@ -103,12 +126,14 @@ function App() {
 
       setError("");
 
-      const response = await fetch(
-        `${API_URL}/api/dashboard`,
-        {
-          cache: "no-store",
-        }
-      );
+      const response =
+        await fetch(
+          `${API_URL}/api/dashboard`,
+          {
+            cache: "no-store",
+          }
+        );
+
 
       if (!response.ok) {
 
@@ -118,9 +143,14 @@ function App() {
 
       }
 
+
       const result =
         await response.json();
 
+
+      // ========================================================
+      // UPDATE LIVE TELEMETRY
+      // ========================================================
 
       setTelemetry({
         ...DEFAULT_TELEMETRY,
@@ -128,14 +158,55 @@ function App() {
       });
 
 
+      // ========================================================
+      // UPDATE TELEMETRY SOURCE
+      // ========================================================
+
       setTelemetrySource(
-        result.telemetry_source || "DEMO"
+        result.telemetry_source ||
+        "DEMO"
       );
 
 
-      setSchedule(
-        result.schedule || null
-      );
+      // ========================================================
+      // IMPORTANT FIX
+      // ========================================================
+      //
+      // DO NOT overwrite the currently displayed AI
+      // recommendation every 5 seconds.
+      //
+      // Before this fix:
+      //
+      // Update Recommendation
+      //       ↓
+      // 6.720 mm
+      //       ↓
+      // 5-second refresh
+      //       ↓
+      // /api/dashboard
+      //       ↓
+      // schedule replaced
+      //       ↓
+      // 0.000 mm
+      //
+      // Now the dashboard schedule is only used when
+      // there is no recommendation already displayed.
+      //
+      // The actual recommendation can still be changed
+      // by Update Recommendation / Recalculate.
+      //
+
+      setSchedule((previous) => {
+
+        if (previous === null) {
+
+          return result.schedule || null;
+
+        }
+
+        return previous;
+
+      });
 
 
     } catch (err) {
@@ -165,6 +236,7 @@ function App() {
   useEffect(() => {
 
     loadDashboard(true);
+
 
     const interval =
       setInterval(() => {
@@ -212,6 +284,10 @@ function App() {
 
       setError("");
 
+
+      // ========================================================
+      // BUILD AI INPUT
+      // ========================================================
 
       const payload = {
 
@@ -280,6 +356,10 @@ function App() {
       };
 
 
+      // ========================================================
+      // SEND TO AI SCHEDULER
+      // ========================================================
+
       const response =
         await fetch(
           `${API_URL}/api/schedule`,
@@ -312,6 +392,23 @@ function App() {
 
       }
 
+
+      // ========================================================
+      // IMPORTANT
+      // ========================================================
+      //
+      // This explicitly replaces the current recommendation.
+      //
+      // Therefore:
+      //
+      // 0.000 → 6.720
+      //
+      // or
+      //
+      // 6.720 → 4.500
+      //
+      // when the farmer deliberately recalculates.
+      //
 
       setSchedule(result);
 
@@ -2007,7 +2104,9 @@ function App() {
         <main className="main">
 
 
-          {/* HEADER */}
+          {/* ==================================================
+              HEADER
+          ================================================== */}
 
           <header
             className="topbar"
@@ -2054,7 +2153,9 @@ function App() {
           </header>
 
 
-          {/* CONNECTION */}
+          {/* ==================================================
+              CONNECTION
+          ================================================== */}
 
           <div className="connection-bar">
 
@@ -2093,6 +2194,10 @@ function App() {
 
           </div>
 
+
+          {/* ==================================================
+              ERROR
+          ================================================== */}
 
           {error && (
 
@@ -3085,6 +3190,10 @@ function App() {
   );
 }
 
+
+// ============================================================
+// REACT ROOT
+// ============================================================
 
 createRoot(
   document.getElementById("root")
